@@ -1,0 +1,36 @@
+{
+  "slug": "shinagawa_yokohama",
+  "title_line1": "品川 → 横浜",
+  "title_line2": "どっちが早い!? 電車最速バトル",
+  "start_name": "品川",
+  "end_label": "横浜",
+  "compress_sec_per_min": 0.5,
+  "intro_sec": 2.0,
+  "outro_hold_sec": 4.0,
+  "routes": [
+    {
+      "key": "route_a",
+      "name": "JR東海道線",
+      "short_name": "東海道線",
+      "color": [235, 130, 20],
+      "stations": [
+        {"line": "上野東京ライン", "name": "品川", "t_min": 0, "popup": true},
+        {"line": "上野東京ライン", "name": "川崎", "t_min": 9, "popup": true},
+        {"line": "上野東京ライン", "name": "横浜", "t_min": 17, "popup": true}
+      ]
+    },
+    {
+      "key": "route_b",
+      "name": "JR横須賀線",
+      "short_name": "横須賀線",
+      "color": [20, 60, 150],
+      "stations": [
+        {"line": "横須賀線総武快速線", "name": "品川", "t_min": 0, "popup": true},
+        {"line": "横須賀線総武快速線", "name": "西大井", "t_min": 5, "popup": true},
+        {"line": "横須賀線総武快速線", "name": "武蔵小杉", "t_min": 11, "popup": true},
+        {"line": "横須賀線総武快速線", "name": "新川崎", "t_min": 14, "popup": true},
+        {"line": "横須賀線総武快速線", "name": "横浜", "t_min": 22, "popup": true}
+      ]
+    }
+  ]
+}

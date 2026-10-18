@@ -1,0 +1,243 @@
+<title>運賃くらべビルダー</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/*SHARED_CSS*/
+.route-card { border-left: 4px solid var(--rc, var(--accent)); }
+table.st input.fare { width: 6.5em; text-align: right; }
+.yen-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.yen-tiles .stat .v { font-size: 24px; }
+.yen-tiles .stat.win { border-color: var(--good); background: var(--good-soft); }
+</style>
+
+<header class="top">
+  <p class="eyebrow">GEOGRAM_JP · VIDEO CONFIG · video_type: fare</p>
+  <h1>同じ発着駅、運賃が安いのはどの路線?</h1>
+  <p class="lead">競合する2〜4本のルートについて、途中駅までの運賃と終着駅までの運賃を入れると、地図上で駅ごとに運賃がポップアップし、同じ距離での比較グラフ、最後に終着駅までの運賃をカウントアップで見せる動画のconfigを作ります。運賃を入れた駅だけが動画に出ます。</p>
+</header>
+
+<div class="layout">
+  <div class="col">
+    <section class="panel">
+      <h2><span class="step">1</span>動画のタイトル</h2>
+      <div class="field-grid">
+        <div class="field"><label for="f-title1">タイトル1行目</label><input type="text" id="f-title1"></div>
+        <div class="field"><label for="f-title2">タイトル2行目</label><input type="text" id="f-title2"></div>
+        <div class="field"><label for="f-slug">ファイル名(slug・英数字)</label><input type="text" id="f-slug" class="mono"></div>
+        <div class="field"><label for="f-label">運賃の種類</label><input type="text" id="f-label" placeholder="IC運賃 / きっぷ運賃"></div>
+        <div class="field"><label for="f-km">同じ距離で比べるkm(カンマ区切り)</label><input type="text" id="f-km" class="mono" placeholder="10,20,30"></div>
+        <div class="field"><label for="f-chart">距離グラフ</label><select id="f-chart"><option value="1">入れる</option><option value="0">入れない</option></select></div>
+      </div>
+    </section>
+
+    <div class="card-list" id="routes"></div>
+    <div class="btn-row"><button type="button" class="ghost" id="add-route">+ ルートを追加(最大4本)</button></div>
+  </div>
+
+  <div class="col sticky">
+    <section class="panel">
+      <h2>プレビュー</h2>
+      <div class="yen-tiles" id="tiles"></div>
+      <svg class="chart" id="chart" viewBox="0 0 520 320" role="img" aria-label="距離と運賃の階段グラフ"></svg>
+      <p class="hint">横軸=始発駅からの距離、縦軸=運賃。黄色の点線が「同じ距離」で比べる位置です(動画では各ルートでその距離にいちばん近い駅の運賃を並べます)。距離は駅データからの目安です。</p>
+      <div id="problems"></div>
+    </section>
+    <section class="panel" id="out"><h2>config JSON</h2></section>
+  </div>
+</div>
+
+<script id="station-data" type="application/json">/*STATION_DATA*/</script>
+<script>
+/*SHARED_JS*/
+</script>
+<script>
+const LS_KEY = "geogram-fare-builder-v1";
+const PALETTE = ["#006eeb", "#e84628", "#1f9e6b", "#8b5cf6"];
+const SAMPLE = {
+  slug: "fare_shinjuku_fujisawa", title_line1: "新宿 → 藤沢", title_line2: "運賃が安いのはどっち!?",
+  fare_label: "IC運賃", compare_km: "10,20,30", show_chart: "1",
+  routes: [
+    { key: "route_a", name: "小田急線", short_name: "小田急", badge: "急", color: "#006eeb",
+      segments: [{ line: "小田急小田原線", preset: 0, from: "新宿", to: "相模大野" }, { line: "小田急江ノ島線", preset: 0, from: "相模大野", to: "藤沢" }],
+      rows: { "下北沢": { fare: "168" }, "成城学園前": { fare: "199" }, "登戸": { fare: "262", popup: true }, "新百合ヶ丘": { fare: "314", popup: true }, "町田": { fare: "377", popup: true }, "中央林間": { fare: "440" }, "大和": { fare: "482", popup: true }, "藤沢": { fare: "545", popup: true } } },
+    { key: "route_b", name: "JR湘南新宿ライン", short_name: "JR", badge: "快", color: "#e84628",
+      segments: [{ line: "湘南新宿ライン", preset: 0, from: "新宿", to: "藤沢" }],
+      rows: { "渋谷": { fare: "178" }, "大崎": { fare: "208" }, "武蔵小杉": { fare: "318", popup: true }, "横浜": { fare: "571", popup: true }, "戸塚": { fare: "814", popup: true }, "藤沢": { fare: "990", popup: true } } },
+  ],
+};
+let state = draftLoad(LS_KEY) || structuredClone(SAMPLE);
+
+function rrow(r, name) { if (!r.rows[name]) r.rows[name] = { fare: "", popup: false }; return r.rows[name]; }
+function fareNum(v) { if (v === "" || v === undefined || v === null) return null; const n = Number(String(v).replace(/[,円¥\s]/g, "")); return Number.isFinite(n) ? n : NaN; }
+function compareKms() { return String(state.compare_km || "").split(/[,、\s]+/).map(Number).filter(n => n > 0).slice(0, 4); }
+
+function routeData(r) {
+  const st = buildStationList(r.segments);
+  const pts = [];
+  st.forEach((s, i) => {
+    let f = fareNum(rrow(r, s.name).fare);
+    if (i === 0 && (f === null || Number.isNaN(f))) f = 0;
+    if (f !== null && !Number.isNaN(f)) pts.push({ km: s.km, fare: f, name: s.name });
+  });
+  return { st, pts };
+}
+
+function buildConfig() {
+  const problems = [];
+  if (!slugOk(state.slug)) problems.push("ファイル名(slug)は英数字・ハイフン・アンダースコアで入れてください。");
+  const datas = state.routes.map(routeData);
+  const routes = state.routes.map((r, ri) => {
+    const { st } = datas[ri];
+    if (st.length < 2) problems.push(`${r.name}: 区間を選んでください。`);
+    const last = st[st.length - 1];
+    if (last && fareNum(rrow(r, last.name).fare) === null) problems.push(`${r.name}: 終着駅 ${last.name} の運賃を入れてください。`);
+    let prev = -1;
+    st.forEach((s, i) => {
+      const f = fareNum(rrow(r, s.name).fare);
+      if (Number.isNaN(f)) problems.push(`${r.name}: ${s.name} の運賃「${rrow(r, s.name).fare}」が数字ではありません。`);
+      else if (f !== null && i > 0) { if (f < prev) problems.push(`${r.name}: ${s.name} の運賃が手前の駅より安くなっています(確認してください)。`); prev = f; }
+    });
+    return {
+      key: r.key, name: r.name, short_name: r.short_name || r.name, color: hexToRgb(r.color), ...(r.badge ? { badge: r.badge.slice(0, 1) } : {}), ...(r.icon_path ? { icon_path: r.icon_path } : {}),
+      stations: st.map((s, i) => {
+        const rw = rrow(r, s.name), f = fareNum(rw.fare);
+        const o = { line: s.line, name: s.name };
+        if (i === 0) o.fare = 0; else if (f !== null && !Number.isNaN(f)) o.fare = f;
+        if (rw.popup && i > 0) o.popup = true;
+        return o;
+      }),
+    };
+  });
+  const starts = new Set(datas.map(d => d.st[0]?.name)), ends = new Set(datas.map(d => d.st[d.st.length - 1]?.name));
+  if (starts.size > 1) problems.push("ルートごとに始発駅が違います(同じ駅名にすると比較が分かりやすくなります)。");
+  if (ends.size > 1) problems.push("ルートごとに終着駅が違います(競合区間なら同じ駅名にそろえてください)。");
+  const st0 = datas[0].st;
+  const config = {
+    video_type: "fare", slug: state.slug, title_line1: state.title_line1, title_line2: state.title_line2,
+    start_name: st0[0]?.name, end_label: st0[st0.length - 1]?.name, fare_label: state.fare_label || "運賃",
+    ...(compareKms().length ? { compare_km: compareKms() } : {}), show_distance_chart: state.show_chart !== "0",
+    routes, _builder: { segments: state.routes.map(r => r.segments) },
+  };
+  return { config, problems, datas };
+}
+
+function renderRoutes() {
+  const box = document.getElementById("routes"); box.innerHTML = "";
+  state.routes.forEach((r, ri) => {
+    const card = el("section", { class: "panel route-card", style: `--rc:${r.color}` });
+    const inp = (key, label, cls, attrs) => {
+      const e = el("input", { type: key === "color" ? "color" : "text", id: `r${ri}-${key}`, value: r[key] || "", ...(attrs || {}) });
+      e.addEventListener("input", () => { r[key] = e.value; if (key === "color") card.style.setProperty("--rc", e.value); update(); if (key === "name") renderHeads(); });
+      return el("div", { class: "field " + (cls || "") }, [el("label", { for: e.id }, [label]), e]);
+    };
+    card.appendChild(el("h2", { class: "rhead" }, [el("span", { class: "step" }, [`ルート${"ABCD"[ri]}`]), r.name || ""]));
+    card.appendChild(el("div", { class: "subcard-head" }, [inp("name", "ルート名"), inp("short_name", "短い名前(グラフ用)"), inp("badge", "バッジ1文字", "tiny", { maxlength: "1" }), inp("color", "色", "tiny")]));
+    card.appendChild(el("div", { class: "subcard-head" }, [iconField(r, `r${ri}-icon`, update)]));
+    const segBox = el("div", { id: `segs-${ri}` });
+    card.appendChild(segBox);
+    const tblWrap = el("div", { class: "table-wrap" });
+    card.appendChild(el("p", { class: "hint" }, ["運賃は数字だけ(例: 262)。運賃を空欄にした駅は動画に出ません。「表示」にチェックした駅はナレーション台本にも入ります。"]));
+    card.appendChild(tblWrap);
+    if (state.routes.length > 2) card.appendChild(el("div", { class: "btn-row" }, [el("button", { type: "button", class: "ghost small", onclick: () => { state.routes.splice(ri, 1); renderRoutes(); update(); } }, ["このルートを削除"])]));
+    box.appendChild(card);
+    const renderTbl = () => {
+      tblWrap.innerHTML = "";
+      const st = buildStationList(r.segments);
+      const tbl = el("table", { class: "st" });
+      tbl.appendChild(el("thead", {}, [el("tr", {}, [el("th", {}, ["駅"]), el("th", {}, ["km"]), el("th", {}, ["運賃(円)"]), el("th", {}, ["表示"])])]));
+      const tb = el("tbody");
+      st.forEach((s, i) => {
+        const rw = rrow(r, s.name);
+        const last = i === st.length - 1;
+        const f = el("input", { type: "text", id: `r${ri}-fare-${i}`, class: "fare num", inputmode: "numeric", value: i === 0 ? "0" : (rw.fare ?? ""), disabled: i === 0, placeholder: "—" });
+        f.addEventListener("input", () => { rw.fare = f.value.trim(); f.classList.toggle("bad", Number.isNaN(fareNum(rw.fare))); update(); });
+        const pop = el("input", { type: "checkbox", id: `r${ri}-pop-${i}`, checked: !!rw.popup, disabled: i === 0, "aria-label": `${s.name}を表示` });
+        pop.addEventListener("change", () => { rw.popup = pop.checked; update(); });
+        tb.appendChild(el("tr", { class: last ? "term" : "" }, [el("td", { class: "name" }, [s.name]), el("td", { class: "km num" }, [s.km.toFixed(1)]), el("td", {}, [f]), el("td", {}, [pop])]));
+      });
+      tbl.appendChild(tb); tblWrap.appendChild(tbl);
+    };
+    renderSegmentEditor(segBox, r.segments, () => { renderTbl(); update(); });
+    renderTbl();
+  });
+  document.getElementById("add-route").disabled = state.routes.length >= 4;
+}
+function renderHeads() { document.querySelectorAll(".route-card .rhead").forEach((h, i) => { h.lastChild.textContent = state.routes[i].name; }); }
+
+function renderPreview(datas) {
+  const tiles = document.getElementById("tiles"); tiles.innerHTML = "";
+  const svg = document.getElementById("chart"); svg.innerHTML = "";
+  const finals = datas.map(d => { const p = d.pts[d.pts.length - 1]; const st = d.st[d.st.length - 1]; return p && st && p.name === st.name ? p : null; });
+  const valid = finals.filter(Boolean).map(p => p.fare);
+  const min = valid.length ? Math.min(...valid) : null;
+  state.routes.forEach((r, ri) => {
+    const p = finals[ri], km = datas[ri].st.length ? datas[ri].st[datas[ri].st.length - 1].km : 0;
+    tiles.appendChild(el("div", { class: "stat" + (p && p.fare === min && new Set(valid).size > 1 ? " win" : "") }, [
+      el("span", { class: "k" }, [el("span", { class: "swatch", style: `background:${r.color}` }), r.short_name || r.name]),
+      el("span", { class: "v" }, [p ? `¥${p.fare.toLocaleString()}` : "—", p && km ? el("small", {}, [` ${(p.fare / km).toFixed(1)}円/km`]) : null]),
+    ]));
+  });
+  const all = datas.flatMap(d => d.pts);
+  if (all.length < 2) return;
+  const maxK = Math.max(...datas.map(d => d.st.length ? d.st[d.st.length - 1].km : 0)) * 1.04 || 1;
+  const maxF = Math.max(...all.map(p => p.fare)) * 1.1 || 1;
+  const L = 56, R = 505, T = 24, B = 286;
+  const X = k => L + (R - L) * k / maxK, Y = f => B - (B - T) * f / maxF;
+  const nice = (span) => { const raw = span / 5, mag = 10 ** Math.floor(Math.log10(raw)); return [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= raw); };
+  const ks = nice(maxK), fs = nice(maxF);
+  for (let k = 0; k <= maxK; k += ks) { svg.appendChild(svgEl("line", { x1: X(k), x2: X(k), y1: T, y2: B, class: "grid" })); svg.appendChild(svgEl("text", { x: X(k), y: B + 18, "text-anchor": "middle", "font-size": 11, class: "mono-t" }, `${k}km`)); }
+  for (let f = 0; f <= maxF; f += fs) { svg.appendChild(svgEl("line", { x1: L, x2: R, y1: Y(f), y2: Y(f), class: "grid" })); svg.appendChild(svgEl("text", { x: L - 6, y: Y(f) + 4, "text-anchor": "end", "font-size": 11, class: "mono-t" }, `¥${f}`)); }
+  svg.appendChild(svgEl("line", { x1: L, x2: R, y1: B, y2: B, class: "axis" }));
+  compareKms().forEach(k => {
+    if (k > maxK) return;
+    svg.appendChild(svgEl("line", { x1: X(k), x2: X(k), y1: T, y2: B, stroke: "#d9a400", "stroke-width": 2, "stroke-dasharray": "5 4" }));
+    svg.appendChild(svgEl("text", { x: X(k), y: T - 8, "text-anchor": "middle", "font-size": 11, fill: "#b58900", "font-weight": 700 }, `約${k}km`));
+  });
+  datas.forEach((d, ri) => {
+    if (!d.pts.length) return;
+    let path = `M${X(0)},${Y(d.pts[0].fare)}`, prev = d.pts[0];
+    d.pts.slice(1).forEach(p => { path += ` L${X(p.km).toFixed(1)},${Y(prev.fare).toFixed(1)} L${X(p.km).toFixed(1)},${Y(p.fare).toFixed(1)}`; prev = p; });
+    svg.appendChild(svgEl("path", { d: path, fill: "none", stroke: state.routes[ri].color, "stroke-width": 3, "stroke-linejoin": "round" }));
+    d.pts.slice(1).forEach(p => svg.appendChild(svgEl("circle", { cx: X(p.km), cy: Y(p.fare), r: 3.5, fill: state.routes[ri].color })));
+    const lp = d.pts[d.pts.length - 1];
+    svg.appendChild(svgEl("text", { x: Math.min(X(lp.km) - 4, R - 4), y: Y(lp.fare) - 8, "text-anchor": "end", "font-size": 12, "font-weight": 700, fill: state.routes[ri].color }, `${state.routes[ri].short_name || state.routes[ri].name} ¥${lp.fare}`));
+  });
+}
+
+let jsonTa;
+function update() {
+  const { config, problems, datas } = buildConfig();
+  jsonTa.value = JSON.stringify(config, null, 2);
+  renderProblems(document.getElementById("problems"), problems);
+  renderPreview(datas);
+  draftSave(LS_KEY, state);
+}
+function bind(id, key) { const e = document.getElementById(id); e.value = state[key] ?? ""; e.oninput = () => { state[key] = e.value; update(); }; e.onchange = e.oninput; }
+function renderAll() {
+  [["f-title1", "title_line1"], ["f-title2", "title_line2"], ["f-slug", "slug"], ["f-label", "fare_label"], ["f-km", "compare_km"], ["f-chart", "show_chart"]].forEach(([i, k]) => bind(i, k));
+  renderRoutes(); update();
+}
+document.getElementById("add-route").onclick = () => {
+  if (state.routes.length >= 4) return;
+  const i = state.routes.length;
+  const first = buildStationList(state.routes[0].segments);
+  const line = state.routes[0].segments[0].line;
+  state.routes.push({ key: "route_" + Math.random().toString(36).slice(2, 7), name: `ルート${"ABCD"[i]}`, short_name: "", badge: "", color: PALETTE[i % 4],
+    segments: [{ line, preset: 0, from: first[0]?.name, to: first[first.length - 1]?.name }], rows: {} });
+  renderRoutes(); update();
+};
+function importConfig(c) {
+  if (c.video_type !== "fare") throw new Error("video_type が fare のJSONではありません");
+  const segsAll = c._builder?.segments || [];
+  state = { slug: c.slug, title_line1: c.title_line1 || "", title_line2: c.title_line2 || "", fare_label: c.fare_label || "", compare_km: (c.compare_km || []).join(","), show_chart: c.show_distance_chart === false ? "0" : "1",
+    routes: c.routes.map((r, i) => {
+      const rows = {}; r.stations.forEach(s => { rows[s.name] = { fare: s.fare === undefined ? "" : String(s.fare), popup: !!s.popup }; });
+      const segs = segsAll[i] || [{ line: r.stations[0].line, preset: 0, from: r.stations[0].name, to: r.stations[r.stations.length - 1].name }];
+      return { key: r.key || `route_${i}`, name: r.name, short_name: r.short_name || "", badge: r.badge || "", icon_path: r.icon_path || "", color: rgbToHex(r.color || [120, 120, 120]), segments: segs, rows };
+    }) };
+  renderAll();
+}
+jsonTa = renderOutput(document.getElementById("out"), () => `${state.slug || "fare"}.json`, () => jsonTa.value, importConfig);
+document.getElementById("out").appendChild(el("p", { class: "hint" }, ["最初に入っている運賃は動作確認用のサンプル値です。実際の運賃は各社の運賃検索で確認して書き換えてください。"]));
+document.getElementById("out").appendChild(el("div", { class: "btn-row" }, [el("button", { type: "button", class: "ghost small", onclick: () => { draftClear(LS_KEY); state = structuredClone(SAMPLE); renderAll(); } }, ["サンプル(新宿→藤沢)に戻す"])]));
+renderAll();
+</script>
