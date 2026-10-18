@@ -302,11 +302,25 @@ function debounce(fn, ms) {
 
 // アイコンを差し替えられる対象(=車両)の一覧。video_type ごとに置き場所が違う:
 //   race / fare : routes[]   rush : runs[]   overtake : local + passers[]
+//   rush(複数路線) : lines[].runs[]
+const iconLabels = new WeakMap();  // 一覧に出す名前(configには書き込まない)
 function iconTargets(cfg) {
   if (!cfg || typeof cfg !== "object") return null;
   if (Array.isArray(cfg.routes)) return cfg.routes;
+  if (Array.isArray(cfg.lines)) {
+    const out = [];
+    cfg.lines.forEach(l => (Array.isArray(l.runs) ? l.runs : []).forEach(r => {
+      iconLabels.set(r, [l.name, r.label, r.train_type ? `(${r.train_type})` : ""].filter(Boolean).join(" "));
+      out.push(r);
+    }));
+    return out;
+  }
   if (Array.isArray(cfg.runs)) return cfg.runs;
-  if (cfg.local) return [cfg.local].concat(Array.isArray(cfg.passers) ? cfg.passers : []);
+  if (cfg.local) {
+    const list = [cfg.local].concat(Array.isArray(cfg.passers) ? cfg.passers : []);
+    list.forEach((t, i) => iconLabels.set(t, i === 0 ? `${t.name || "普通"}(主役)` : `${t.name || "列車"} ${i}本目`));
+    return list;
+  }
   return null;
 }
 
@@ -337,7 +351,7 @@ function renderIconPicker() {
 
     const name = document.createElement("span");
     name.className = "rname";
-    name.textContent = r.name || r.label || r.short_name || ("ルート" + (i + 1));
+    name.textContent = iconLabels.get(r) || r.name || r.label || r.short_name || ("ルート" + (i + 1));
 
     const thumb = document.createElement("img");
     thumb.className = "thumb";
@@ -616,11 +630,14 @@ def generate_from_json():
 
     # video_type: race(既定) / fare は 'routes'、rush / overtake は 'stations' が必須
     vtype = config.get("video_type", "race") if isinstance(config, dict) else None
-    required = {"race": "routes", "fare": "routes", "rush": "stations", "overtake": "stations"}.get(vtype)
+    # (rush は1路線の 'stations' 形式と、複数路線の 'lines' 形式のどちらでもよい)
+    required = {"race": ["routes"], "fare": ["routes"], "rush": ["lines", "stations"],
+                "overtake": ["stations"]}.get(vtype)
     if not isinstance(config, dict) or required is None:
         return jsonify({"error": "configオブジェクトではないか、未対応の video_type です"}), 400
-    if not config.get(required):
-        return jsonify({"error": f"'{required}' を含むconfigではないようです(video_type={vtype})"}), 400
+    if not any(config.get(k) for k in required):
+        need = "' または '".join(required)
+        return jsonify({"error": f"'{need}' を含むconfigではないようです(video_type={vtype})"}), 400
 
     slug = str(config.get("slug", "")).strip()
     if not slug:
