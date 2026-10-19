@@ -377,16 +377,25 @@ def render_rush(config, geojson_path, station_db, out_dir="output", fast_preview
                            badge_side="left" if side < 0 else "right", scale=0.85 if multi else 1.0)
         for t0, kind, st, r, lag, ln in pop_events:
             el = tv - t0
-            if 0 <= el <= 1.6:
-                alpha = 255 if el < 1.25 else int(255 * (1.6 - el) / 0.35)
-                x, y = project(proj, st["lon"], st["lat"])
-                if kind == "name":
+            if el < 0:
+                continue
+            x, y = project(proj, st["lon"], st["lat"])
+            if kind == "name":
+                # 駅名は従来どおりポップアップして消える
+                if el <= 1.6:
+                    alpha = 255 if el < 1.25 else int(255 * (1.6 - el) / 0.35)
                     draw_chip(canvas, x, y - 18, st["name"], (255, 255, 255), size=32,
                               scale=pop_scale(el), alpha=alpha)
-                else:
-                    who = f"{ln.name} {r.label}" if multi else r.label
-                    draw_chip(canvas, x, y + 92 + (ln.idx * 56 if multi else 0), f"{who} +{lag:.0f}分", r.color,
-                              size=26 if multi else 28, scale=pop_scale(el), alpha=alpha, tail=False)
+            else:
+                # 遅い方が通過した時点の差「朝+1分」は、文字だけで最後まで表示し続ける
+                d = ImageDraw.Draw(canvas, "RGBA")
+                sc = pop_scale(el) if el < 0.4 else 1.0
+                label = f"{r.badge[:1]}+{lag:.0f}分"
+                if multi:
+                    label = f"{ln.name}{label}" if len(lines) > 1 and ln.name else label
+                ty = y + 40 + (ln.idx * 34 if multi else 0)
+                d.text((x, ty), label, font=font(max(1, int((26 if multi else 30) * sc)), "black"),
+                       fill=tuple(r.color) + (255,), anchor="mm", stroke_width=4, stroke_fill=(5, 8, 18, 255))
         if multi:
             _draw_panel_multi(canvas, lines, e_by, panel_top)
         else:
