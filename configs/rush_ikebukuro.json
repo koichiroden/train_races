@@ -1,0 +1,145 @@
+{
+  "video_type": "rush",
+  "slug": "rush_ikebukuro",
+  "title_line1": "所沢 → 池袋",
+  "title_line2": "朝vs昼 所要時間比較!",
+  "start_name": "所沢",
+  "end_label": "池袋",
+  "video_duration_sec": 32,
+  "lines": [
+    {
+      "name": "西武池袋線",
+      "color": [
+        236,
+        252,
+        3
+      ],
+      "stations": [
+        {
+          "line": "西武池袋線",
+          "name": "所沢"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "秋津"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "清瀬"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "東久留米",
+          "popup": true
+        },
+        {
+          "line": "西武池袋線",
+          "name": "ひばりヶ丘",
+          "popup": true
+        },
+        {
+          "line": "西武池袋線",
+          "name": "保谷",
+          "popup": true
+        },
+        {
+          "line": "西武池袋線",
+          "name": "大泉学園"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "石神井公園",
+          "popup": true
+        },
+        {
+          "line": "西武池袋線",
+          "name": "練馬高野台"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "富士見台"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "中村橋"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "練馬"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "桜台"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "江古田"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "東長崎"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "椎名町"
+        },
+        {
+          "line": "西武池袋線",
+          "name": "池袋",
+          "popup": true
+        }
+      ],
+      "runs": [
+        {
+          "key": "morning",
+          "label": "朝ラッシュ",
+          "badge": "朝",
+          "train_type": "通勤急行",
+          "type_badge": "朝",
+          "color": [
+            185,
+            198,
+            6
+          ],
+          "times": {
+            "所沢": "07:54",
+            "東久留米": "08:00",
+            "保谷": "08:05",
+            "石神井公園": "08:10",
+            "池袋": "08:26"
+          }
+        },
+        {
+          "key": "daytime",
+          "label": "日中",
+          "badge": "昼",
+          "train_type": "急行",
+          "type_badge": "昼",
+          "color": [
+            245,
+            236,
+            138
+          ],
+          "times": {
+            "所沢": "11:39",
+            "ひばりヶ丘": "11:45",
+            "石神井公園": "11:51",
+            "池袋": "12:02"
+          }
+        }
+      ]
+    }
+  ],
+  "_builder": {
+    "segments": [
+      [
+        {
+          "line": "西武池袋線",
+          "preset": 0,
+          "from": "所沢",
+          "to": "池袋"
+        }
+      ]
+    ]
+  }
+}
