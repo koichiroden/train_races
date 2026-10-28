@@ -233,6 +233,7 @@ PAGE = """<!doctype html>
 </head>
 <body>
   <h1>電車最速バトル — 動画生成</h1>
+  <p class="note">config を作るツール: <a href="/builders">/builders</a>(朝ラッシュ・運賃・抜かれ回数・駅レース)。スマホなど別の端末からは <span class="slug">http://このPCのIPアドレス:8080/builders</span> で開けます。</p>
   <p class="note">自分のPCで動かす場合はフルクオリティでも数分で終わります。CPUが非力な環境(無料ホスティングなど)では、まず「低画質プレビュー(高速)」をおすすめします。</p>
 
   <h2 class="section">① JSONを用意して生成</h2>
@@ -616,6 +617,90 @@ def generate(slug):
     fast = request.form.get("fast") == "1"
     data, status_code = _start_job(slug, fast, request.form.get("out_name", ""))
     return jsonify(data), status_code
+
+
+def _parse_and_save_config(raw):
+    """JSON文字列を検証して configs/<slug>.json に保存する。
+    戻り値: (slug, None) または (None, (エラー応答, ステータス))"""
+    if not raw.strip():
+        return None, (jsonify({"error": "JSONを貼り付けてください"}), 400)
+    try:
+        config = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return None, (jsonify({"error": f"JSONの構文エラー: {e}"}), 400)
+    vtype = config.get("video_type", "race") if isinstance(config, dict) else None
+    required = {"race": ["routes"], "fare": ["routes"], "rush": ["lines", "stations"],
+                "overtake": ["stations"]}.get(vtype)
+    if not isinstance(config, dict) or required is None:
+        return None, (jsonify({"error": "configオブジェクトではないか、未対応の video_type です"}), 400)
+    if not any(config.get(k) for k in required):
+        need = "' または '".join(required)
+        return None, (jsonify({"error": f"'{need}' を含むconfigではないようです(video_type={vtype})"}), 400)
+    slug = str(config.get("slug", "")).strip()
+    if not slug:
+        return None, (jsonify({"error": "configに 'slug' が必要です"}), 400)
+    if not _SLUG_RE.match(slug):
+        return None, (jsonify({"error": "slugは英数字とハイフン・アンダースコアのみ使えます(64文字以内)"}), 400)
+    try:
+        with open(CONFIGS_DIR / f"{slug}.json", "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        return None, (jsonify({"error": f"保存に失敗しました: {e}"}), 500)
+    return slug, None
+
+
+# ---- config作成ツール(ビルダー)をこのサーバーからも開けるようにする --------------
+# スマホや別のPCから http://<このPCのIP>:8080/builders を開けば、Claudeのアーティファクト
+# と同じビルダーが使え、さらに「configsに保存」「保存して動画を生成」ボタンが出る。
+TOOLS_DIR = BASE_DIR / "tools"
+BUILDERS = {
+    "race": ("config_builder.html", "電車最速バトル(駅レースビルダー)"),
+    "rush": ("rush_builder.html", "朝ラッシュ vs 日中"),
+    "fare": ("fare_builder.html", "運賃くらべ"),
+    "overtake": ("overtake_builder.html", "普通列車 抜かれ回数"),
+}
+_SKELETON_HEAD = ('<!doctype html><html lang="ja"><head><meta charset="utf-8">'
+                  '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
+                  '</head><body>')
+
+
+@app.route("/builders")
+def builders_index():
+    items = "".join(
+        f'<li><a href="/builder/{k}">{label}</a> <span>({fn})</span></li>' for k, (fn, label) in BUILDERS.items()
+        if (TOOLS_DIR / fn).exists())
+    html = (_SKELETON_HEAD + "<title>config作成ツール</title><style>body{font-family:sans-serif;max-width:640px;"
+            "margin:32px auto;padding:0 16px;line-height:1.8}li{margin:6px 0}span{color:#888;font-size:12px}</style>"
+            "<h1>config作成ツール</h1><p>作ったconfigは、各ツールの「configsに保存」「保存して動画を生成」で"
+            "このPCに直接保存・生成できます。</p><ul>" + items +
+            '</ul><p><a href="/">← 動画生成ページへ</a></p></body></html>')
+    return html
+
+
+@app.route("/builder/<name>")
+def builder_page(name):
+    if name not in BUILDERS:
+        return "そのツールはありません", 404
+    path = TOOLS_DIR / BUILDERS[name][0]
+    if not path.exists():
+        return f"{path.name} が見つかりません", 404
+    body = path.read_text(encoding="utf-8")
+    return _SKELETON_HEAD + body + "</body></html>", 200, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@app.route("/api/server_info")
+def server_info():
+    """ビルダーが「このサーバーから開かれているか」を判定するのに使う。"""
+    return jsonify({"ok": True, "icons": [f"assets/{n}" for n in list_icon_assets()],
+                    "configs": [c["slug"] for c in list_configs()]})
+
+
+@app.route("/save_config", methods=["POST"])
+def save_config():
+    slug, err = _parse_and_save_config(request.form.get("json_text", ""))
+    if err:
+        return err
+    return jsonify({"slug": slug, "path": f"configs/{slug}.json"})
 
 
 @app.route("/generate_from_json", methods=["POST"])

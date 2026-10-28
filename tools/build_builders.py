@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-tools/src/*.html (ビルダーのテンプレート) に、共通CSS/JS と駅データ・系統プリセット
+tools/src/*.html (ビルダーのテンプレート) に、共通CSS/JS と駅データ
+(data/stations_shp のSHP + tools/src/alias_lines.json)・系統プリセット
 (tools/config_builder.html から抽出)を埋め込んで、1ファイルで動く
 tools/<name>_builder.html を生成する。
 
     python3 tools/build_builders.py
 """
+import json
 import re
 from pathlib import Path
 
@@ -13,10 +15,47 @@ ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
 
 
+# 駅の並び順が複数系統で混線していて、範囲選択ではなく系統プリセットで選ばせる路線
+SCRAMBLED_LINES = {"上野東京ライン", "湘南新宿ライン"}
+
+
+def station_data_from_shp():
+    """動画生成(Python)と同じ駅データSHP(data/stations_shp/tokyo_stations)から、
+    ビルダー用の駅一覧JSONを作る。以前は config_builder.html に埋め込まれた古い
+    駅一覧をコピーしていたため、路線が足りない・埼京線の駅順が違うなどの不整合が
+    あった。SHPを唯一の正にすることで、Python側と必ず一致させる。"""
+    import sys
+    sys.path.insert(0, str(ROOT.parent))
+    from race_video.station_db import load_station_db
+    db = load_station_db(str(ROOT.parent / "data" / "stations_shp" / "tokyo_stations"))
+    data = {}
+    for line, rows in db.items():
+        data[line] = {
+            "scrambled": line in SCRAMBLED_LINES,
+            "stations": [{"name": r["name"], "seq": r["seq"], "cum_km": round(r["cum_km"], 3)} for r in rows],
+        }
+    # SHPに無い愛称路線(東海道本線・宇都宮線・高崎線)は手作業で用意した停車順を足す
+    alias = json.loads((SRC / "alias_lines.json").read_text(encoding="utf-8"))
+    for k, v in alias.items():
+        if not k.startswith("_"):
+            data[k] = v
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
+def update_config_builder_station_data(station_json):
+    """既存の駅レースビルダー(config_builder.html)の埋め込み駅データも同じものに更新する。"""
+    p = ROOT / "config_builder.html"
+    h = p.read_text(encoding="utf-8")
+    new = re.sub(r'(<script id="station-data" type="application/json">)(.*?)(</script>)',
+                 lambda m: m.group(1) + station_json + m.group(3), h, count=1, flags=re.S)
+    if new != h:
+        p.write_text(new, encoding="utf-8")
+        print("updated station data in", p)
+
+
 def extract_from_config_builder():
     h = (ROOT / "config_builder.html").read_text(encoding="utf-8")
-    m = re.search(r'<script id="station-data" type="application/json">(.*?)</script>', h, re.S)
-    station_json = m.group(1).strip()
+    station_json = station_data_from_shp()
     i = h.index("const MANUAL_PRESETS = {")
     depth, j = 0, h.index("{", i)
     for k in range(j, len(h)):
@@ -74,6 +113,7 @@ def overtake_sample_state():
 
 def main():
     station_json, presets = extract_from_config_builder()
+    update_config_builder_station_data(station_json)
     css = (SRC / "shared.css").read_text(encoding="utf-8")
     js = (SRC / "shared.js").read_text(encoding="utf-8").replace("/*MANUAL_PRESETS*/", presets)
     for name in ("rush", "fare", "overtake"):

@@ -20,6 +20,8 @@ config 例は configs/fare_shinjuku_fujisawa.json を参照。
                "stations": [{"line": "...", "name": "新宿", "fare": 0},
                             {"line": "...", "name": "登戸", "fare": 270, "popup": true}, ...]} ]
 "fare" を書いた駅だけがポップアップ・グラフの対象になる(始発駅は0扱い)。
+駅に "km"(始発駅からの距離。営業キロなど)を書くと、距離グラフ・同距離比較・
+1kmあたり運賃にその値を使う(省略時は線路データ上の距離)。
 終着駅の "fare" は必須。
 """
 import math
@@ -69,6 +71,32 @@ class FareRoute:
         self.total_km = sts[-1]["cum_km"] - k0
         self.final_fare = self.points[-1][1]
 
+        # 表示用の距離(グラフ・同距離比較・1kmあたり運賃に使う)。
+        # 駅に "km"(始発駅からの距離。営業キロなど)が書いてあればそれを使い、
+        # 無い駅は前後の手入力値の間を線路上の距離の比で補う(手入力が無ければ線路上の距離)。
+        geo = [s["cum_km"] - k0 for s in sts]
+        man = [None if s.get("km") in (None, "") else float(s["km"]) for s in sts]
+        man[0] = 0.0 if man[0] is None else man[0]
+        known = [i for i, v in enumerate(man) if v is not None]
+        disp = []
+        for i, g in enumerate(geo):
+            if man[i] is not None:
+                disp.append(man[i])
+                continue
+            a = max([k for k in known if k < i], default=None)
+            b = min([k for k in known if k > i], default=None)
+            if a is not None and b is not None and geo[b] > geo[a]:
+                disp.append(man[a] + (man[b] - man[a]) * (g - geo[a]) / (geo[b] - geo[a]))
+            elif a is not None:
+                ratio = (man[a] / geo[a]) if geo[a] > 0 and man[a] > 0 else 1.0
+                disp.append(man[a] + (g - geo[a]) * ratio)
+            else:
+                disp.append(g)
+        by_station = {id(s): d for s, d in zip(sts, disp)}
+        self.dpoints = [(by_station[id(st)], fare, st) for _k, fare, st in self.points]   # 表示km版
+        self.disp_total_km = disp[-1]
+        self.manual_km = len(known) > 1
+
     def fare_at_progress(self, km):
         """km 地点までに通過した最後の運賃駅の (運賃, 駅, 通過km)"""
         cur = self.points[0]
@@ -78,8 +106,9 @@ class FareRoute:
         return cur
 
     def nearest_point(self, km):
-        cands = [p for p in self.points if p[0] > 0.5]
-        return min(cands, key=lambda p: abs(p[0] - km)) if cands else self.points[-1]
+        """同距離比較用: 表示km(手入力があればそれ)で km に一番近い運賃駅"""
+        cands = [p for p in self.dpoints if p[0] > 0.5]
+        return min(cands, key=lambda p: abs(p[0] - km)) if cands else self.dpoints[-1]
 
 
 def _nice_step(span, target=5):
@@ -92,7 +121,7 @@ def _nice_step(span, target=5):
 
 
 def _auto_compare_km(routes):
-    shortest = min(r.total_km for r in routes)
+    shortest = min(r.disp_total_km for r in routes)
     step = 10 if shortest >= 25 else 5
     kms = [k for k in range(step, int(shortest) + 1, step)]
     return kms[:4] or [round(shortest / 2)]
@@ -156,7 +185,7 @@ def _draw_distance_chart(canvas, cfg, routes, t, compare_km, chart_sec):
            fill=(255, 255, 255, int(255 * a_in)), anchor="mm")
     d.text((CANVAS_W / 2, 395), f"横軸=乗った距離 / 縦軸={cfg.get('fare_label', '運賃')}", font=font(28),
            fill=(255, 215, 0, int(255 * a_in)), anchor="mm")
-    max_km = max(r.total_km for r in routes) * 1.04
+    max_km = max(r.disp_total_km for r in routes) * 1.04
     max_fare = max(r.final_fare for r in routes) * 1.12
     box = (160, 470, CANVAS_W - 60, 1180)
     x0, y0, x1, y1 = box
@@ -172,9 +201,9 @@ def _draw_distance_chart(canvas, cfg, routes, t, compare_km, chart_sec):
     km_lim = max_km * draw_f
     for r in routes:
         pts = []
-        prev = r.points[0]
+        prev = r.dpoints[0]
         pts.append((X(0), Y(prev[1])))
-        for p in r.points[1:]:
+        for p in r.dpoints[1:]:
             if p[0] > km_lim:
                 pts.append((X(km_lim), Y(prev[1])))
                 break
@@ -183,7 +212,7 @@ def _draw_distance_chart(canvas, cfg, routes, t, compare_km, chart_sec):
             prev = p
         if len(pts) >= 2:
             d.line(pts, fill=r.color + (255,), width=6, joint="curve")
-        for p in r.points[1:]:
+        for p in r.dpoints[1:]:
             if p[0] <= km_lim:
                 d.ellipse([X(p[0]) - 6, Y(p[1]) - 6, X(p[0]) + 6, Y(p[1]) + 6], fill=r.color + (255,))
 
@@ -246,7 +275,7 @@ def _draw_final(canvas, cfg, routes, t):
         d.rounded_rectangle([70, ry, CANVAS_W - 70, ry + row_h - 30], radius=26, fill=(20, 24, 40, 240),
                             outline=r.color + (255,), width=5)
         d.text((110, ry + 50), r.name, font=font(38, "black"), fill=r.color + (255,), anchor="lm")
-        d.text((110, ry + 105), f"{r.total_km:.1f}km / 1kmあたり {r.final_fare / max(r.total_km, 0.1):.1f}円",
+        d.text((110, ry + 105), f"{r.disp_total_km:.1f}km / 1kmあたり {r.final_fare / max(r.disp_total_km, 0.1):.1f}円",
                font=font(26), fill=(200, 210, 230, 255), anchor="lm")
         v = r.final_fare * count_f
         win = count_f >= 1 and r.final_fare == cheapest and len(set(x.final_fare for x in routes)) > 1

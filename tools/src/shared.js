@@ -74,6 +74,35 @@ function buildStationList(segments) {
   return out;
 }
 
+// ---- 途中駅の削除(外す) ----
+// holder.removed に外した駅名を持たせる。始発駅・終着駅は外せない。
+function filterRemoved(st, removed) {
+  const set = new Set(removed || []);
+  return st.filter((s, i) => i === 0 || i === st.length - 1 || !set.has(s.name));
+}
+function removeStationButton(holder, name, onChange) {
+  return el("button", { type: "button", class: "ghost small del-st", title: `${name} を外す`, "aria-label": `${name} を外す`,
+    onclick: () => { holder.removed = (holder.removed || []).concat([name]); onChange(); } }, ["✕"]);
+}
+// 外した駅の一覧(「戻す」ボタン付き)。区間に含まれない駅名は自動で掃除する
+function removedBar(holder, fullSt, onChange) {
+  const inRange = new Set(fullSt.map(s => s.name));
+  holder.removed = (holder.removed || []).filter(n => inRange.has(n));
+  if (!holder.removed.length) return el("span");
+  const order = new Map(fullSt.map((s, i) => [s.name, i]));
+  const names = [...holder.removed].sort((a, b) => order.get(a) - order.get(b));
+  return el("div", { class: "removed-bar" }, [
+    el("span", { class: "k" }, [`外した駅(${names.length})`]),
+    ...names.map(n => el("button", { type: "button", class: "chip", title: `${n} を戻す`, onclick: () => { holder.removed = holder.removed.filter(x => x !== n); onChange(); } }, [n, el("span", { "aria-hidden": "true" }, [" ↺"])])),
+    el("button", { type: "button", class: "ghost small", onclick: () => { holder.removed = []; onChange(); } }, ["すべて戻す"]),
+  ]);
+}
+// 区間から作った駅一覧と config の駅一覧の差 = 外した駅(JSON読み込み時に復元する)
+function removedFrom(segments, cfgStations) {
+  const keep = new Set(cfgStations.map(s => s.name));
+  return buildStationList(segments).map(s => s.name).filter(n => !keep.has(n));
+}
+
 // 区間エディタ: segments 配列を直接書き換え、変更のたびに onChange()
 function renderSegmentEditor(container, segments, onChange) {
   container.innerHTML = "";
@@ -99,7 +128,10 @@ function renderSegmentEditor(container, segments, onChange) {
       if (idx > 0) { const prev = resolveSegment(segments[idx - 1]); const last = prev[prev.length - 1]; if (last && st.some(x => x.name === last.name)) seg.from = last.name; }
       renderSegmentEditor(container, segments, onChange); onChange();
     });
-    const del = el("button", { class: "ghost small", type: "button", disabled: segments.length <= 1, onclick: () => { segments.splice(idx, 1); renderSegmentEditor(container, segments, onChange); onChange(); } }, ["削除"]);
+    // 区間が1つだけのときは消せないので、押せない「削除」ボタンは出さない(路線ごとの削除と紛らわしいため)
+    const del = segments.length > 1
+      ? el("button", { class: "ghost small", type: "button", onclick: () => { segments.splice(idx, 1); renderSegmentEditor(container, segments, onChange); onChange(); } }, ["区間を削除"])
+      : el("span");
     box.appendChild(el("div", { class: "field line-f" }, [el("label", { for: lineSel.id }, [idx === 0 ? "路線" : `乗継・直通 ${idx}`]), lineSel]));
     box.appendChild(mkSel("from", "から"));
     box.appendChild(mkSel("to", "まで"));
@@ -199,7 +231,10 @@ function renderOutput(container, filenameFn, getText, onImport) {
   const status = el("span", { class: "status", id: container.id + "-status" });
   const imp = el("textarea", { class: "json", id: container.id + "-imp", placeholder: "以前このページで作ったJSONを貼り付け", spellcheck: "false", style: "min-height:90px" });
   const impStatus = el("span", { class: "status" });
+  const serverBox = el("div", { id: container.id + "-server" });
+  detectServer().then(info => { if (info) renderServerPanel(serverBox, info, getText); });
   container.append(
+    serverBox,
     el("div", { class: "btn-row" }, [
       el("button", { type: "button", onclick: () => saveJsonFile(filenameFn(), getText(), status, ta) }, ["JSONを保存"]),
       el("button", { type: "button", class: "ghost", onclick: () => copyText(getText(), status, ta) }, ["コピー"]),
@@ -222,7 +257,7 @@ function renderOutput(container, filenameFn, getText, onImport) {
 // 同じファイルをリポジトリの assets/ に置いておく)。
 const _iconPreviews = {};
 function iconField(obj, id, onChange) {
-  const txt = el("input", { type: "text", id, value: obj.icon_path || "", placeholder: "assets/xxx.png(空欄=標準アイコン)", class: "mono", autocomplete: "off" });
+  const txt = el("input", { type: "text", id, value: obj.icon_path || "", placeholder: "assets/xxx.png(空欄=標準アイコン)", class: "mono", autocomplete: "off", list: "server-icons" });
   const thumb = el("img", { alt: "", style: "height:28px;max-width:80px;object-fit:contain;display:none;border-radius:4px;background:var(--surface)" });
   const showThumb = () => { const src = _iconPreviews[obj.icon_path]; if (src) { thumb.src = src; thumb.style.display = ""; } else { thumb.removeAttribute("src"); thumb.style.display = "none"; } };
   const norm = (v) => { v = v.trim(); if (v && !v.includes("/")) v = "assets/" + v; return v; };
@@ -242,6 +277,53 @@ function iconField(obj, id, onChange) {
     txt,
     el("div", { class: "btn-row" }, [pick, clear, thumb, file]),
   ]);
+}
+
+// ---- 動画生成サーバー(web/app.py)から開かれているときだけ出す機能 ----
+// アーティファクトとして開いたときは /api/server_info に届かないので何も出ない。
+async function detectServer() {
+  if (!/^https?:$/.test(location.protocol)) return null;
+  try {
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 2500);
+    const r = await fetch("/api/server_info", { signal: ctl.signal }); clearTimeout(tm);
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j && j.ok ? j : null;
+  } catch (e) { return null; }
+}
+function renderServerPanel(container, info, getText) {
+  // アイコン候補(サーバーの assets/ にあるPNG)を入力欄の候補として出す
+  let dl = document.getElementById("server-icons");
+  if (!dl) { dl = el("datalist", { id: "server-icons" }); document.body.appendChild(dl); }
+  dl.innerHTML = ""; (info.icons || []).forEach(p => dl.appendChild(el("option", { value: p })));
+  const fast = el("input", { type: "checkbox", id: container.id + "-fast" });
+  const status = el("div", { class: "status" });
+  const post = async (url) => {
+    const body = new URLSearchParams(); body.set("json_text", getText()); if (fast.checked) body.set("fast", "1");
+    const r = await fetch(url, { method: "POST", body }); return r.json();
+  };
+  const poll = (jobId) => fetch("/status/" + jobId).then(r => r.json()).then(job => {
+    if (job.status === "running") { setStatus(status, "生成中…(数分かかることがあります)", ""); setTimeout(() => poll(jobId), 3000); }
+    else if (job.status === "done") {
+      const name = (job.file_name || "output.mp4").replace(/\.mp4$/, "");
+      status.className = "status ok"; status.textContent = "完成しました → ";
+      status.appendChild(el("a", { href: "/download/" + encodeURIComponent(name) }, [name + ".mp4 をダウンロード"]));
+    } else setStatus(status, "エラー: " + (job.error || "不明なエラー"), "err");
+  }).catch(() => setTimeout(() => poll(jobId), 4000));
+  const saveBtn = el("button", { type: "button", class: "ghost", onclick: async () => {
+    try { const j = await post("/save_config"); if (j.error) setStatus(status, j.error, "err"); else setStatus(status, `${j.path} に保存しました`, "ok"); }
+    catch (e) { setStatus(status, "保存できませんでした: " + e.message, "err"); }
+  } }, ["configsに保存"]);
+  const genBtn = el("button", { type: "button", onclick: async () => {
+    try { const j = await post("/generate_from_json"); if (j.job_id) { setStatus(status, "生成を開始しました…", ""); poll(j.job_id); } else setStatus(status, j.error || "開始できませんでした", "err"); }
+    catch (e) { setStatus(status, "開始できませんでした: " + e.message, "err"); }
+  } }, ["保存して動画を生成"]);
+  container.appendChild(el("div", { class: "subcard" }, [
+    el("strong", {}, ["このPCで使う(動画生成サーバーに接続中)"]),
+    el("div", { class: "btn-row" }, [saveBtn, genBtn, el("label", { for: fast.id, class: "status" }, [fast, " 低画質プレビュー(高速)"])]),
+    status,
+    el("p", { class: "hint" }, ["保存先は configs/<ファイル名>.json。生成した動画は ", el("a", { href: "/" }, ["動画生成ページ"]), " からも再生成・ダウンロードできます。"]),
+  ]));
 }
 
 function renderProblems(container, problems) {

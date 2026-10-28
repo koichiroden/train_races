@@ -26,7 +26,7 @@
     </section>
 
     <div class="card-list" id="lines"></div>
-    <div class="btn-row"><button type="button" class="ghost" id="add-line">+ 路線を追加(最大3路線)</button></div>
+    <div class="btn-row"><button type="button" class="ghost" id="add-line">+ 路線を追加(最大3路線)</button><span class="status">1路線だけで朝と昼を比べるときは、路線を1つにしてください(各路線カード右上の「この路線を削除」)。</span></div>
   </div>
 
   <div class="col sticky">
@@ -77,6 +77,18 @@ const SAMPLE = {
               "横浜": { popup: true, t: ["08:09", "12:30"] }, "大船": { popup: true, t: ["08:30", "12:47"] } } },
   ],
 };
+const SAMPLE_SINGLE = {
+  slug: "rush_chuo_tokyo_takao", title_line1: "東京 → 高尾", title_line2: "朝ラッシュと日中、どれだけ違う!?",
+  video_duration_sec: 30,
+  lines: [{ name: "中央線快速", color: "#eb463c",
+    segments: [{ line: "中央線快速", preset: 0, from: "東京", to: "高尾" }],
+    runs: [
+      { key: "morning", label: "朝ラッシュ", badge: "朝", train_type: "快速", type_badge: "", color: "#eb463c" },
+      { key: "daytime", label: "日中", badge: "昼", train_type: "中央特快", type_badge: "", color: "#46a0ff" }],
+    rows: { "東京": { popup: true, t: ["07:30", "12:00"] }, "新宿": { popup: true, t: ["07:47", "12:14"] },
+            "吉祥寺": { popup: true, t: ["08:07", "12:31"] }, "立川": { popup: true, t: ["08:30", "12:50"] },
+            "八王子": { popup: true, t: ["08:41", "13:00"] }, "高尾": { popup: true, t: ["08:48", "13:06"] } } }],
+};
 // v1(1路線だけの形)の下書きが残っていれば lines 形式に移す
 function migrate(st) {
   if (!st) return null;
@@ -87,7 +99,7 @@ function migrate(st) {
 }
 let state = migrate(draftLoad(LS_KEY)) || migrate(draftLoad("geogram-rush-builder-v1")) || structuredClone(SAMPLE);
 
-function stationsOf(ln) { return buildStationList(ln.segments); }
+function stationsOf(ln) { return filterRemoved(buildStationList(ln.segments), ln.removed); }
 function row(ln, name) { if (!ln.rows[name]) ln.rows[name] = { popup: false, t: ["", ""] }; return ln.rows[name]; }
 function lineTitle(ln, li) { return ln.name || `路線${li + 1}`; }
 
@@ -152,7 +164,8 @@ function renderLines() {
     nameIn.addEventListener("input", () => { ln.name = nameIn.value; card.querySelector("h2 .ttl").textContent = lineTitle(ln, li); update(); });
     const colIn = el("input", { type: "color", id: `l${li}-color`, value: ln.color });
     colIn.addEventListener("input", () => { ln.color = colIn.value; card.style.setProperty("--lc", ln.color); update(); });
-    card.appendChild(el("h2", {}, [el("span", { class: "step" }, [`路線${li + 1}`]), el("span", { class: "ttl" }, [lineTitle(ln, li)])]));
+    card.appendChild(el("h2", {}, [el("span", { class: "step" }, [`路線${li + 1}`]), el("span", { class: "ttl" }, [lineTitle(ln, li)]),
+      state.lines.length > 1 ? el("button", { type: "button", class: "ghost small", style: "margin-left:auto", onclick: () => { state.lines.splice(li, 1); renderLines(); update(); } }, ["この路線を削除"]) : null]));
     card.appendChild(el("div", { class: "subcard-head" }, [
       el("div", { class: "field" }, [el("label", { for: nameIn.id }, ["路線名(動画に表示)"]), nameIn]),
       el("div", { class: "field tiny" }, [el("label", { for: colIn.id }, ["路線色"]), colIn]),
@@ -179,10 +192,11 @@ function renderLines() {
     });
     card.appendChild(runGrid);
 
-    card.appendChild(el("p", { class: "hint" }, ["「730」「7:30」のように入れると 07:30 に整えます。始発駅と終着駅は2本とも必須です。「表示」にチェックした駅は駅名がポップアップし、遅い方がその駅を通過したときに「+N分」が出ます。最初に入っている時刻は動作確認用のサンプル値です。"]));
+    card.appendChild(el("p", { class: "hint" }, ["「730」「7:30」のように入れると 07:30 に整えます。始発駅と終着駅は2本とも必須です。「表示」にチェックした駅は駅名がポップアップし、遅い方がその駅を通過したときに「+N分」が出ます。使わない途中駅は右端の ✕ で外せます(外した駅は表の下から戻せます)。最初に入っている時刻は動作確認用のサンプル値です。"]));
     const tblWrap = el("div", { class: "table-wrap" });
     card.appendChild(tblWrap);
-    if (state.lines.length > 1) card.appendChild(el("div", { class: "btn-row" }, [el("button", { type: "button", class: "ghost small", onclick: () => { state.lines.splice(li, 1); renderLines(); update(); } }, ["この路線を削除"])]));
+    const remBox = el("div");
+    card.appendChild(remBox);
     box.appendChild(card);
 
     function renderTbl() {
@@ -192,6 +206,7 @@ function renderLines() {
       tbl.appendChild(el("thead", {}, [el("tr", {}, [
         el("th", {}, ["駅"]), el("th", {}, ["km"]), el("th", {}, ["表示"]),
         ...ln.runs.map(r => el("th", {}, [el("span", { class: "swatch", style: `background:${r.color}` }), r.label + (r.train_type ? `(${r.train_type})` : "")])),
+        el("th", {}, ["外す"]),
       ])]));
       const tb = el("tbody");
       st.forEach((s, i) => {
@@ -202,9 +217,12 @@ function renderLines() {
         tb.appendChild(el("tr", { class: term ? "term" : "" }, [
           el("td", { class: "name" }, [s.name]), el("td", { class: "km num" }, [s.km.toFixed(1)]), el("td", {}, [pop]),
           ...ln.runs.map((r, ri) => el("td", {}, [timeInput(`l${li}-t-${i}-${ri}`, rw.t[ri], (v) => { rw.t[ri] = v; update(); })])),
+          el("td", {}, [term ? "" : removeStationButton(ln, s.name, () => { renderTbl(); update(); })]),
         ]));
       });
       tbl.appendChild(tb); tblWrap.appendChild(tbl);
+      remBox.innerHTML = "";
+      remBox.appendChild(removedBar(ln, buildStationList(ln.segments), () => { renderTbl(); update(); }));
     }
     renderSegmentEditor(segBox, ln.segments, () => { renderTbl(); update(); });
     renderTbl();
@@ -300,13 +318,14 @@ function importConfig(c) {
       let segs = Array.isArray(segsAll?.[0]) ? segsAll[li] : (li === 0 && segsAll && !Array.isArray(segsAll[0]) ? segsAll : null);
       if (!segs) segs = [{ line: ln.stations[0].line, preset: 0, from: ln.stations[0].name, to: ln.stations[ln.stations.length - 1].name }];
       const lc = ln.color ? rgbToHex(ln.color) : LINE_COLORS[li % 3];
-      return { name: ln.name || "", color: lc, segments: segs, rows,
+      return { name: ln.name || "", color: lc, segments: segs, rows, removed: removedFrom(segs, ln.stations),
         runs: ln.runs.slice(0, 2).map((r, i) => ({ key: r.key || (i ? "daytime" : "morning"), label: r.label, badge: r.badge || r.label[0], icon_path: r.icon_path || "",
           train_type: r.train_type || "", type_badge: r.type_badge || "", color: r.color ? rgbToHex(r.color) : (i ? lighten(lc) : lc) })) };
     }) };
   renderAll();
 }
 jsonTa = renderOutput(document.getElementById("out"), () => `${state.slug || "rush"}.json`, () => jsonTa.value, importConfig);
-document.getElementById("out").appendChild(el("div", { class: "btn-row" }, [el("button", { type: "button", class: "ghost small", onclick: () => { draftClear(LS_KEY); state = structuredClone(SAMPLE); renderAll(); } }, ["サンプル(東海道線・横須賀線 東京→大船)に戻す"])]));
+document.getElementById("out").appendChild(el("div", { class: "btn-row" }, [el("button", { type: "button", class: "ghost small", onclick: () => { draftClear(LS_KEY); state = structuredClone(SAMPLE); renderAll(); } }, ["サンプル: 2路線(東海道線・横須賀線)"]),
+  el("button", { type: "button", class: "ghost small", onclick: () => { draftClear(LS_KEY); state = structuredClone(SAMPLE_SINGLE); renderAll(); } }, ["サンプル: 1路線(中央線 東京→高尾)"])]));
 renderAll();
 </script>

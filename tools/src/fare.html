@@ -38,7 +38,7 @@ table.st input.fare { width: 6.5em; text-align: right; }
       <h2>プレビュー</h2>
       <div class="yen-tiles" id="tiles"></div>
       <svg class="chart" id="chart" viewBox="0 0 520 320" role="img" aria-label="距離と運賃の階段グラフ"></svg>
-      <p class="hint">横軸=始発駅からの距離、縦軸=運賃。黄色の点線が「同じ距離」で比べる位置です(動画では各ルートでその距離にいちばん近い駅の運賃を並べます)。距離は駅データからの目安です。</p>
+      <p class="hint">横軸=始発駅からの距離、縦軸=運賃。黄色の点線が「同じ距離」で比べる位置です(動画では各ルートでその距離にいちばん近い駅の運賃を並べます)。距離は手入力した値を使い、空欄の駅は駅データからの目安です。</p>
       <div id="problems"></div>
     </section>
     <section class="panel" id="out"><h2>config JSON</h2></section>
@@ -66,17 +66,32 @@ const SAMPLE = {
 };
 let state = draftLoad(LS_KEY) || structuredClone(SAMPLE);
 
-function rrow(r, name) { if (!r.rows[name]) r.rows[name] = { fare: "", popup: false }; return r.rows[name]; }
+function rrow(r, name) { if (!r.rows[name]) r.rows[name] = { fare: "", popup: false, km: "" }; return r.rows[name]; }
 function fareNum(v) { if (v === "" || v === undefined || v === null) return null; const n = Number(String(v).replace(/[,円¥\s]/g, "")); return Number.isFinite(n) ? n : NaN; }
 function compareKms() { return String(state.compare_km || "").split(/[,、\s]+/).map(Number).filter(n => n > 0).slice(0, 4); }
 
+function routeStations(r) { return filterRemoved(buildStationList(r.segments), r.removed); }
+// 表示用の距離(dkm): 手入力のkmがあればそれ、無い駅は前後の手入力値の間を
+// 駅データの距離の比で補う(Python側 fare_video.py と同じ考え方)
+function applyDisplayKm(r, st) {
+  const man = st.map((s, i) => { const v = fareNum(rrow(r, s.name).km); return v === null || Number.isNaN(v) ? (i === 0 ? 0 : null) : v; });
+  const known = man.map((v, i) => v === null ? -1 : i).filter(i => i >= 0);
+  st.forEach((s, i) => {
+    if (man[i] !== null) { s.dkm = man[i]; s.manual = i > 0; return; }
+    const a = [...known].reverse().find(k => k < i), b = known.find(k => k > i);
+    if (a !== undefined && b !== undefined && st[b].km > st[a].km) s.dkm = man[a] + (man[b] - man[a]) * (s.km - st[a].km) / (st[b].km - st[a].km);
+    else if (a !== undefined) { const ratio = st[a].km > 0 && man[a] > 0 ? man[a] / st[a].km : 1; s.dkm = man[a] + (s.km - st[a].km) * ratio; }
+    else s.dkm = s.km;
+  });
+  return st;
+}
 function routeData(r) {
-  const st = buildStationList(r.segments);
+  const st = applyDisplayKm(r, routeStations(r));
   const pts = [];
   st.forEach((s, i) => {
     let f = fareNum(rrow(r, s.name).fare);
     if (i === 0 && (f === null || Number.isNaN(f))) f = 0;
-    if (f !== null && !Number.isNaN(f)) pts.push({ km: s.km, fare: f, name: s.name });
+    if (f !== null && !Number.isNaN(f)) pts.push({ km: s.dkm, fare: f, name: s.name });
   });
   return { st, pts };
 }
@@ -94,6 +109,7 @@ function buildConfig() {
     st.forEach((s, i) => {
       const f = fareNum(rrow(r, s.name).fare);
       if (Number.isNaN(f)) problems.push(`${r.name}: ${s.name} の運賃「${rrow(r, s.name).fare}」が数字ではありません。`);
+      if (Number.isNaN(fareNum(rrow(r, s.name).km))) problems.push(`${r.name}: ${s.name} の距離「${rrow(r, s.name).km}」が数字ではありません。`);
       else if (f !== null && i > 0) { if (f < prev) problems.push(`${r.name}: ${s.name} の運賃が手前の駅より安くなっています(確認してください)。`); prev = f; }
     });
     return {
@@ -103,6 +119,8 @@ function buildConfig() {
         const o = { line: s.line, name: s.name };
         if (i === 0) o.fare = 0; else if (f !== null && !Number.isNaN(f)) o.fare = f;
         if (rw.popup && i > 0) o.popup = true;
+        const km = fareNum(rw.km);
+        if (i > 0 && km !== null && !Number.isNaN(km)) o.km = km;
         return o;
       }),
     };
@@ -129,39 +147,47 @@ function renderRoutes() {
       e.addEventListener("input", () => { r[key] = e.value; if (key === "color") card.style.setProperty("--rc", e.value); update(); if (key === "name") renderHeads(); });
       return el("div", { class: "field " + (cls || "") }, [el("label", { for: e.id }, [label]), e]);
     };
-    card.appendChild(el("h2", { class: "rhead" }, [el("span", { class: "step" }, [`ルート${"ABCD"[ri]}`]), r.name || ""]));
+    card.appendChild(el("h2", { class: "rhead" }, [el("span", { class: "step" }, [`ルート${"ABCD"[ri]}`]), el("span", { class: "ttl" }, [r.name || ""]),
+      state.routes.length > 2 ? el("button", { type: "button", class: "ghost small", style: "margin-left:auto", onclick: () => { state.routes.splice(ri, 1); renderRoutes(); update(); } }, ["このルートを削除"]) : null]));
     card.appendChild(el("div", { class: "subcard-head" }, [inp("name", "ルート名"), inp("short_name", "短い名前(グラフ用)"), inp("badge", "バッジ1文字", "tiny", { maxlength: "1" }), inp("color", "色", "tiny")]));
     card.appendChild(el("div", { class: "subcard-head" }, [iconField(r, `r${ri}-icon`, update)]));
     const segBox = el("div", { id: `segs-${ri}` });
     card.appendChild(segBox);
     const tblWrap = el("div", { class: "table-wrap" });
-    card.appendChild(el("p", { class: "hint" }, ["運賃は数字だけ(例: 262)。運賃を空欄にした駅は動画に出ません。「表示」にチェックした駅はナレーション台本にも入ります。"]));
+    card.appendChild(el("p", { class: "hint" }, ["運賃は数字だけ(例: 262)。距離(km)は営業キロなどを入れたいときだけ入力します(空欄なら灰色の数字=駅データの距離を使い、入れた駅の間は自動で補います)。運賃を空欄にした駅は動画に出ません。「表示」にチェックした駅はナレーション台本にも入ります。経路に含めたくない途中駅は右端の ✕ で外せます。"]));
     card.appendChild(tblWrap);
-    if (state.routes.length > 2) card.appendChild(el("div", { class: "btn-row" }, [el("button", { type: "button", class: "ghost small", onclick: () => { state.routes.splice(ri, 1); renderRoutes(); update(); } }, ["このルートを削除"])]));
     box.appendChild(card);
     const renderTbl = () => {
       tblWrap.innerHTML = "";
-      const st = buildStationList(r.segments);
+      const st = applyDisplayKm(r, routeStations(r));
       const tbl = el("table", { class: "st" });
-      tbl.appendChild(el("thead", {}, [el("tr", {}, [el("th", {}, ["駅"]), el("th", {}, ["km"]), el("th", {}, ["運賃(円)"]), el("th", {}, ["表示"])])]));
+      tbl.appendChild(el("thead", {}, [el("tr", {}, [el("th", {}, ["駅"]), el("th", { title: "始発駅からの距離。空欄なら駅データの距離" }, ["距離(km)"]), el("th", {}, ["運賃(円)"]), el("th", {}, ["表示"]), el("th", {}, ["外す"])])]));
       const tb = el("tbody");
       st.forEach((s, i) => {
         const rw = rrow(r, s.name);
         const last = i === st.length - 1;
         const f = el("input", { type: "text", id: `r${ri}-fare-${i}`, class: "fare num", inputmode: "numeric", value: i === 0 ? "0" : (rw.fare ?? ""), disabled: i === 0, placeholder: "—" });
         f.addEventListener("input", () => { rw.fare = f.value.trim(); f.classList.toggle("bad", Number.isNaN(fareNum(rw.fare))); update(); });
+        const kmIn = el("input", { type: "text", id: `r${ri}-km-${i}`, class: "fare num", inputmode: "decimal", value: i === 0 ? "0" : (rw.km ?? ""), disabled: i === 0,
+          placeholder: s.dkm !== undefined ? s.dkm.toFixed(1) : s.km.toFixed(1), title: "空欄なら駅データの距離(灰色の数字)を使います" });
+        kmIn.addEventListener("change", () => { rw.km = kmIn.value.trim(); kmIn.classList.toggle("bad", Number.isNaN(fareNum(rw.km))); renderTbl(); update(); });
         const pop = el("input", { type: "checkbox", id: `r${ri}-pop-${i}`, checked: !!rw.popup, disabled: i === 0, "aria-label": `${s.name}を表示` });
         pop.addEventListener("change", () => { rw.popup = pop.checked; update(); });
-        tb.appendChild(el("tr", { class: last ? "term" : "" }, [el("td", { class: "name" }, [s.name]), el("td", { class: "km num" }, [s.km.toFixed(1)]), el("td", {}, [f]), el("td", {}, [pop])]));
+        tb.appendChild(el("tr", { class: last ? "term" : "" }, [el("td", { class: "name" }, [s.name]), el("td", {}, [kmIn]), el("td", {}, [f]), el("td", {}, [pop]),
+          el("td", {}, [i === 0 || last ? "" : removeStationButton(r, s.name, () => { renderTbl(); update(); })])]));
       });
       tbl.appendChild(tb); tblWrap.appendChild(tbl);
+      tblWrap.after(remBox);
+      remBox.innerHTML = "";
+      remBox.appendChild(removedBar(r, buildStationList(r.segments), () => { renderTbl(); update(); }));
     };
+    const remBox = el("div");
     renderSegmentEditor(segBox, r.segments, () => { renderTbl(); update(); });
     renderTbl();
   });
   document.getElementById("add-route").disabled = state.routes.length >= 4;
 }
-function renderHeads() { document.querySelectorAll(".route-card .rhead").forEach((h, i) => { h.lastChild.textContent = state.routes[i].name; }); }
+function renderHeads() { document.querySelectorAll(".route-card .rhead").forEach((h, i) => { h.querySelector(".ttl").textContent = state.routes[i].name; }); }
 
 function renderPreview(datas) {
   const tiles = document.getElementById("tiles"); tiles.innerHTML = "";
@@ -170,7 +196,7 @@ function renderPreview(datas) {
   const valid = finals.filter(Boolean).map(p => p.fare);
   const min = valid.length ? Math.min(...valid) : null;
   state.routes.forEach((r, ri) => {
-    const p = finals[ri], km = datas[ri].st.length ? datas[ri].st[datas[ri].st.length - 1].km : 0;
+    const p = finals[ri], km = datas[ri].st.length ? datas[ri].st[datas[ri].st.length - 1].dkm : 0;
     tiles.appendChild(el("div", { class: "stat" + (p && p.fare === min && new Set(valid).size > 1 ? " win" : "") }, [
       el("span", { class: "k" }, [el("span", { class: "swatch", style: `background:${r.color}` }), r.short_name || r.name]),
       el("span", { class: "v" }, [p ? `¥${p.fare.toLocaleString()}` : "—", p && km ? el("small", {}, [` ${(p.fare / km).toFixed(1)}円/km`]) : null]),
@@ -178,7 +204,7 @@ function renderPreview(datas) {
   });
   const all = datas.flatMap(d => d.pts);
   if (all.length < 2) return;
-  const maxK = Math.max(...datas.map(d => d.st.length ? d.st[d.st.length - 1].km : 0)) * 1.04 || 1;
+  const maxK = Math.max(...datas.map(d => d.st.length ? d.st[d.st.length - 1].dkm : 0)) * 1.04 || 1;
   const maxF = Math.max(...all.map(p => p.fare)) * 1.1 || 1;
   const L = 56, R = 505, T = 24, B = 286;
   const X = k => L + (R - L) * k / maxK, Y = f => B - (B - T) * f / maxF;
@@ -230,9 +256,9 @@ function importConfig(c) {
   const segsAll = c._builder?.segments || [];
   state = { slug: c.slug, title_line1: c.title_line1 || "", title_line2: c.title_line2 || "", fare_label: c.fare_label || "", compare_km: (c.compare_km || []).join(","), show_chart: c.show_distance_chart === false ? "0" : "1",
     routes: c.routes.map((r, i) => {
-      const rows = {}; r.stations.forEach(s => { rows[s.name] = { fare: s.fare === undefined ? "" : String(s.fare), popup: !!s.popup }; });
+      const rows = {}; r.stations.forEach(s => { rows[s.name] = { fare: s.fare === undefined ? "" : String(s.fare), popup: !!s.popup, km: s.km === undefined ? "" : String(s.km) }; });
       const segs = segsAll[i] || [{ line: r.stations[0].line, preset: 0, from: r.stations[0].name, to: r.stations[r.stations.length - 1].name }];
-      return { key: r.key || `route_${i}`, name: r.name, short_name: r.short_name || "", badge: r.badge || "", icon_path: r.icon_path || "", color: rgbToHex(r.color || [120, 120, 120]), segments: segs, rows };
+      return { key: r.key || `route_${i}`, name: r.name, short_name: r.short_name || "", badge: r.badge || "", icon_path: r.icon_path || "", color: rgbToHex(r.color || [120, 120, 120]), segments: segs, rows, removed: removedFrom(segs, r.stations) };
     }) };
   renderAll();
 }

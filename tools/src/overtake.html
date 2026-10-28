@@ -41,7 +41,7 @@ table.st td.loc { background: var(--accent-soft); }
 
     <section class="panel">
       <h2><span class="step">4</span>時刻を入れる</h2>
-      <p class="hint">普通列車: 「発」だけ入れれば到着はその<span id="dwell-label">30</span>秒前とみなします。待避で長く止まる駅は「着」と「発」の両方を入れてください。<br>追い抜く列車: 「10:05」=通過(または始発・終着)、「10:12/10:13」=停車(着/発)。時刻の無い駅は距離に比例して補完します。</p>
+      <p class="hint">普通列車: 「発」だけ入れれば到着はその<span id="dwell-label">30</span>秒前とみなします。待避で長く止まる駅は「着」と「発」の両方を入れてください。<br>追い抜く列車: 「10:05」=通過(または始発・終着)、「10:12/10:13」=停車(着/発)。時刻の無い駅は距離に比例して補完します。<br>普通列車が止まらない駅(通過する駅)は右端の ✕ で外してください。外した駅は表の下から戻せます。</p>
       <div class="field-grid"><div class="field"><label for="f-dwell">普通列車の標準停車時間(秒)</label><input type="number" id="f-dwell" min="0" max="300"></div></div>
       <div class="table-wrap"><table class="st" id="tbl"></table></div>
     </section>
@@ -70,7 +70,7 @@ const PASSER_COLORS = ["#e62828", "#ff8c1e", "#28aa5a", "#9660f0", "#f050aa"];
 const SAMPLE = /*SAMPLE_STATE*/;
 let state = draftLoad(LS_KEY) || structuredClone(SAMPLE);
 
-function stations() { return buildStationList(state.segments); }
+function stations() { return filterRemoved(buildStationList(state.segments), state.removed); }
 function row(name) { const r = state.rows[name] || (state.rows[name] = { popup: false, arr: "", dep: "", p: [] }); while (r.p.length < state.passers.length) r.p.push(""); return r; }
 function splitStop(v) { const s = String(v || "").trim(); if (!s) return null; const p = s.split(/[\/~〜\-]/).map(x => x.trim()).filter(Boolean); return p.length >= 2 ? { arr: p[0], dep: p[p.length - 1] } : p[0]; }
 
@@ -189,6 +189,7 @@ function renderTable() {
     el("th", {}, ["駅"]), el("th", {}, ["km"]), el("th", {}, ["表示"]),
     el("th", {}, [dot(state.local), `${state.local.name} 着`]), el("th", {}, [`${state.local.name} 発`]),
     ...state.passers.map((p, pi) => el("th", { class: "pcol" }, [dot(p), `${p.name || "列車"}${pi + 1}`])),
+    el("th", {}, ["外す"]),
   ])]));
   const tb = el("tbody");
   st.forEach((s, i) => {
@@ -201,9 +202,14 @@ function renderTable() {
       el("td", { class: "loc" }, [last ? "—" : timeInput(`dep-${i}`, r.dep, v => { r.dep = v; update(); })]),
       ...state.passers.map((p, pi) => { const e = el("input", { type: "text", id: `p-${i}-${pi}`, class: "wide", value: r.p[pi] || "", placeholder: "--:--", autocomplete: "off" });
         e.addEventListener("change", () => { r.p[pi] = e.value.trim(); update(); }); return el("td", {}, [e]); }),
+      el("td", {}, [first || last ? "" : removeStationButton(state, s.name, () => { renderTable(); update(); })]),
     ]));
   });
   tbl.appendChild(tb);
+  let rem = document.getElementById("removed-box");
+  if (!rem) { rem = el("div", { id: "removed-box" }); tbl.closest(".table-wrap").after(rem); }
+  rem.innerHTML = "";
+  rem.appendChild(removedBar(state, buildStationList(state.segments), () => { renderTable(); update(); }));
 }
 
 function renderPreview(cfg, st, problems) {
@@ -284,6 +290,7 @@ function importConfig(c) {
   state = { slug: c.slug, title_line1: c.title_line1 || "", title_line2: c.title_line2 || "", video_duration_sec: c.video_duration_sec || 40,
     default_dwell_sec: c.local.default_dwell_sec ?? 30,
     segments: c._builder?.segments || [{ line: c.stations[0].line, preset: 0, from: c.stations[0].name, to: c.stations[c.stations.length - 1].name }],
+    removed: removedFrom(c._builder?.segments || [{ line: c.stations[0].line, preset: 0, from: c.stations[0].name, to: c.stations[c.stations.length - 1].name }], c.stations),
     local: { name: c.local.name || "普通", badge: c.local.badge || "普", icon_path: c.local.icon_path || "", color: rgbToHex(c.local.color || [90, 200, 255]) },
     passers: (c.passers || []).map(p => ({ name: p.name, badge: p.badge || p.name[0], icon_path: p.icon_path || "", color: rgbToHex(p.color || [230, 40, 40]) })), rows };
   renderAll();
