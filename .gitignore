@@ -1,0 +1,17 @@
+# レンダリング成果物・作業ファイル
+frames/
+output/*.mp4
+output/*.png
+output/*.txt
+output/*.srt
+output/*.json
+!output/README.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
