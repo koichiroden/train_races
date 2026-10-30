@@ -12,7 +12,7 @@ table.st input.fare { width: 6.5em; text-align: right; }
 <header class="top">
   <p class="eyebrow">GEOGRAM_JP · VIDEO CONFIG · video_type: fare</p>
   <h1>同じ発着駅、運賃が安いのはどの路線?</h1>
-  <p class="lead">競合する2〜4本のルートについて、途中駅までの運賃と終着駅までの運賃を入れると、地図上で駅ごとに運賃がポップアップし、同じ距離での比較グラフ、最後に終着駅までの運賃をカウントアップで見せる動画のconfigを作ります。運賃を入れた駅だけが動画に出ます。</p>
+  <p class="lead">競合する2〜4本のルートについて、途中駅までの運賃と終着駅までの運賃を入れると、鳥瞰図の地図の上に「高さ＝運賃」の壁が伸び、最後に壁をたたんで距離×運賃の重ね合わせグラフにし、終着駅までの運賃をカウントアップで見せる動画のconfigを作ります。運賃を入れた駅だけが動画に出ます。</p>
 </header>
 
 <div class="layout">
@@ -24,9 +24,7 @@ table.st input.fare { width: 6.5em; text-align: right; }
         <div class="field"><label for="f-title2">タイトル2行目</label><input type="text" id="f-title2"></div>
         <div class="field"><label for="f-slug">ファイル名(slug・英数字)</label><input type="text" id="f-slug" class="mono"></div>
         <div class="field"><label for="f-label">運賃の種類</label><input type="text" id="f-label" placeholder="IC運賃 / きっぷ運賃"></div>
-        <div class="field"><label for="f-km">同じ距離で比べるkm(カンマ区切り)</label><input type="text" id="f-km" class="mono" placeholder="10,20,30"></div>
-        <div class="field"><label for="f-chart">距離グラフ(平面版のみ)</label><select id="f-chart"><option value="1">入れる</option><option value="0">入れない</option></select></div>
-        <div class="field"><label for="f-view">動画の見せ方</label><select id="f-view"><option value="2d">平面(地図+棒グラフ)</option><option value="3d">鳥瞰図(高さ=運賃の壁→グラフにたたむ)</option></select></div>
+        <div class="field"><label for="f-km">グラフに引く距離の目印km(カンマ区切り)</label><input type="text" id="f-km" class="mono" placeholder="10,20,30"></div>
       </div>
     </section>
 
@@ -55,7 +53,7 @@ const LS_KEY = "geogram-fare-builder-v1";
 const PALETTE = ["#006eeb", "#e84628", "#1f9e6b", "#8b5cf6"];
 const SAMPLE = {
   slug: "fare_shinjuku_fujisawa", title_line1: "新宿 → 藤沢", title_line2: "運賃が安いのはどっち!?",
-  fare_label: "IC運賃", compare_km: "10,20,30", show_chart: "1", view: "2d",
+  fare_label: "IC運賃", compare_km: "10,20,30",
   routes: [
     { key: "route_a", name: "小田急線", short_name: "小田急", badge: "急", color: "#006eeb",
       segments: [{ line: "小田急小田原線", preset: 0, from: "新宿", to: "相模大野" }, { line: "小田急江ノ島線", preset: 0, from: "相模大野", to: "藤沢" }],
@@ -131,9 +129,9 @@ function buildConfig() {
   if (ends.size > 1) problems.push("ルートごとに終着駅が違います(競合区間なら同じ駅名にそろえてください)。");
   const st0 = datas[0].st;
   const config = {
-    video_type: "fare", ...(state.view === "3d" ? { view: "3d" } : {}), slug: state.slug, title_line1: state.title_line1, title_line2: state.title_line2,
+    video_type: "fare", slug: state.slug, title_line1: state.title_line1, title_line2: state.title_line2,
     start_name: st0[0]?.name, end_label: st0[st0.length - 1]?.name, fare_label: state.fare_label || "運賃",
-    ...(compareKms().length ? { compare_km: compareKms() } : {}), show_distance_chart: state.show_chart !== "0",
+    ...(compareKms().length ? { compare_km: compareKms() } : {}),
     routes, _builder: { segments: state.routes.map(r => r.segments) },
   };
   return { config, problems, datas };
@@ -240,7 +238,7 @@ function update() {
 }
 function bind(id, key) { const e = document.getElementById(id); e.value = state[key] ?? ""; e.oninput = () => { state[key] = e.value; update(); }; e.onchange = e.oninput; }
 function renderAll() {
-  [["f-title1", "title_line1"], ["f-title2", "title_line2"], ["f-slug", "slug"], ["f-label", "fare_label"], ["f-km", "compare_km"], ["f-chart", "show_chart"], ["f-view", "view"]].forEach(([i, k]) => bind(i, k));
+  [["f-title1", "title_line1"], ["f-title2", "title_line2"], ["f-slug", "slug"], ["f-label", "fare_label"], ["f-km", "compare_km"]].forEach(([i, k]) => bind(i, k));
   renderRoutes(); update();
 }
 document.getElementById("add-route").onclick = () => {
@@ -255,7 +253,7 @@ document.getElementById("add-route").onclick = () => {
 function importConfig(c) {
   if (c.video_type !== "fare") throw new Error("video_type が fare のJSONではありません");
   const segsAll = c._builder?.segments || [];
-  state = { slug: c.slug, title_line1: c.title_line1 || "", title_line2: c.title_line2 || "", fare_label: c.fare_label || "", compare_km: (c.compare_km || []).join(","), show_chart: c.show_distance_chart === false ? "0" : "1", view: c.view === "3d" ? "3d" : "2d",
+  state = { slug: c.slug, title_line1: c.title_line1 || "", title_line2: c.title_line2 || "", fare_label: c.fare_label || "", compare_km: (c.compare_km || []).join(","),
     routes: c.routes.map((r, i) => {
       const rows = {}; r.stations.forEach(s => { rows[s.name] = { fare: s.fare === undefined ? "" : String(s.fare), popup: !!s.popup, km: s.km === undefined ? "" : String(s.km) }; });
       const segs = segsAll[i] || [{ line: r.stations[0].line, preset: 0, from: r.stations[0].name, to: r.stations[r.stations.length - 1].name }];

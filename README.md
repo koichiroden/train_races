@@ -141,7 +141,7 @@ localStorageに自動保存されるので、リロードしても失われま�
 |---|---|---|---|---|
 | `race`(省略時) | 電車最速バトル | `animate.py` | `tools/config_builder.html` | `configs/shinjuku_fujisawa.json` |
 | `rush` | 朝ラッシュと日中で同じ区間の所要時間がどれだけ違うか(複数路線も可) | `rush_video.py` | `tools/rush_builder.html` | `configs/rush_chuo_tokyo_takao.json`, `configs/rush_tokaido_yokosuka.json` |
-| `fare` | 競合路線の運賃比較(駅ごとの運賃→同距離比較→最終運賃) | `fare_video.py` | `tools/fare_builder.html` | `configs/fare_shinjuku_fujisawa.json` |
+| `fare` | 競合路線の運賃比較(鳥瞰図で高さ=運賃の壁→重ね合わせグラフ→最終運賃) | `fare_video.py` | `tools/fare_builder.html` | `configs/fare_shinjuku_fujisawa.json` |
 | `overtake` | 普通列車が終点までに何本に抜かれるか | `overtake_video.py` | `tools/overtake_builder.html` | `configs/overtake_keikyu_shinagawa_yokohama.json` |
 
 ```bash
@@ -179,6 +179,9 @@ python3 -m race_video.cli configs/overtake_keikyu_shinagawa_yokohama.json
 
 ### fare(運賃比較)
 
+標準は下の「鳥瞰図(3D)版」です。config の書き方(運賃・距離など)は共通で、以下の 1〜3 は
+`"view": "2d"` にしたときの平面版の流れです。
+
 1. 地図フェーズ: 各ルートの車両が同じペース(km基準)で進み、`fare` を書いた駅を
    通過すると駅のそばに「駅名 ¥xxx」がポップアップ。下の棒グラフもその駅までの
    運賃にカウントアップしながら伸びます。
@@ -193,24 +196,27 @@ python3 -m race_video.cli configs/overtake_keikyu_shinagawa_yokohama.json
   1kmあたり運賃にその値を使います。書いていない駅は前後の手入力値の間を線路データの
   距離の比で補います(1つも無ければ線路データ上の距離)。車両の動きは常に実際の線形に沿います。
 
-#### 鳥瞰図(3D)版 — `"view": "3d"`
+#### 鳥瞰図(3D)版(標準)
 
-運賃比較の config に `"view": "3d"` を足すと、立体的に見せる版になります
-(`race_video/fare3d_video.py`、サンプル: `configs/fare3d_shinjuku_fujisawa.json`)。
+**運賃比較の動画は鳥瞰図版が標準です**(`race_video/fare3d_video.py`)。以前の平面版と同じ
+config がそのまま使えます(サンプル: `configs/fare_shinjuku_fujisawa.json`)。
 
 1. オープニング: 画面中央に大きくタイトル(`title_line1` / `title_line2`、上の小見出しは
    `title_kicker`、省略時「IC運賃くらべ」など)→ 上部の見出しへ移動
 2. 鳥瞰図: 地図を斜め上から見下ろし、線路の上に **高さ=運賃** の壁が伸びていく。
    運賃が上がる駅で段が上がり、主な駅に「駅名 ¥運賃」。カメラはゆっくり回り込む
 3. たたむ: 壁がほどけて(先に距離方向、少し遅れて運賃方向)重ね合わせの階段グラフに倒れ込む
-4. グラフ: 横軸=距離・縦軸=運賃。主な駅名と終点の運賃(安い方を手前に描画)
+4. グラフ: 横軸=距離・縦軸=運賃。主な駅名・終点の運賃(安い方を手前に描画)。
+   `compare_km`(例 `[10, 20, 30]`)があれば「約10km」などの目印線を引く
 5. 最終運賃のカウントアップ
 
 駅名・金額は先に置いた文字と重ならない位置を探して置き、置けないものは省略します。
 既定のフレームレートは **60fps**(`"fps"` で変更可、`--fast` は20fps)。
 カメラは `camera_az_start` / `camera_az_end`(回り込みの角度、度)・`camera_elevation`(見下ろす角度)、
 長さは `title_sec` / `map_sec` / `morph_sec` / `chart_sec` / `final_sec`(秒)、グラフ見出しは `chart_title` で変えられます。
-運賃くらべビルダーの「動画の見せ方」で「鳥瞰図」を選んでも同じです。
+
+以前の平面版(地図+棒グラフ+距離グラフ)を使いたいときだけ、config に `"view": "2d"` を書いてください
+(平面版の `show_distance_chart` などはその場合のみ有効)。
 
 ### overtake(普通列車は何本に抜かれる?)
 

@@ -2,6 +2,9 @@
 """
 ネタ②「競合路線、運賃が安いのはどっち?」動画。
 
+※ 現在の標準は鳥瞰図(3D)版(race_video/fare3d_video.py)。このファイルの平面版は
+  config に "view": "2d" と書いたときだけ使われる(同じconfigのまま切り替えられる)。
+
 同じ発着駅を結ぶ2〜4本の競合ルートについて、
   1) 地図フェーズ : 車両が同じペース(km基準)で進み、運賃を入れた途中駅を
                     通過すると駅の近くに「¥xxx」がポップアップ。下の棒グラフも
@@ -15,7 +18,7 @@
 config 例は configs/fare_shinjuku_fujisawa.json を参照。
   "video_type": "fare"
   "fare_label": "IC運賃"
-  "view": "3d"                     # 省略時は平面版。"3d" で鳥瞰図版(race_video/fare3d_video.py)
+  "view": "2d"                     # 省略時は鳥瞰図版(race_video/fare3d_video.py)。"2d" で以前の平面版
   "compare_km": [10, 20, 30]       # 省略時は自動
   "routes": [ {"key","name","short_name","color",
                "stations": [{"line": "...", "name": "新宿", "fare": 0},
@@ -305,8 +308,8 @@ def _draw_final(canvas, cfg, routes, t):
 
 
 def render_fare(config, geojson_path, station_db, out_dir="output", fast_preview=False, out_name=None):
-    if config.get("view") == "3d":
-        # 鳥瞰図(3D)版は別モジュール(race_video/fare3d_video.py)
+    if config.get("view", "3d") != "2d":
+        # 標準は鳥瞰図(3D)版(race_video/fare3d_video.py)。以前の平面版は "view": "2d" のときだけ
         from .fare3d_video import render_fare3d
         return render_fare3d(config, geojson_path, station_db, out_dir=out_dir, fast_preview=fast_preview,
                              out_name=out_name)

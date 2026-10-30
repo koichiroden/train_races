@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-運賃比較の「鳥瞰図(3D)」版。config で "video_type": "fare", "view": "3d" を指定すると使われる。
+運賃比較の「鳥瞰図(3D)」版。"video_type": "fare" の標準の見せ方
+(以前の平面版と同じconfigで動く。平面版にしたいときだけ "view": "2d")。
+config の "compare_km"(例 [10, 20, 30])があれば、最後のグラフに「約10km」などの目印線を引く。
 
   1) タイトル   : 画面中央に大きくタイトル → 上部の見出しへ
   2) 鳥瞰図     : 地図を斜め上から見下ろし、各ルートの線路の上に「高さ=運賃」の壁を立てる。
@@ -414,6 +416,14 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
                    stroke_width=3, stroke_fill=STROKE)
             placer.block(d.textbbox((x + 14, y), r.short, font=font(28, "black"), anchor="lb", stroke_width=3))
             placer.block(d.textbbox((x + 14, y + 2), yen(r.final_fare), font=font(34, "black"), anchor="lt", stroke_width=3))
+        # 同じ距離の目印(compare_km)
+        for km in [k for k in (config.get("compare_km") or []) if 0 < k < DMAX]:
+            x = float(CX(km))
+            for yy in range(int(CH[1]), int(CH[3]), 18):
+                d.line([(x, yy), (x, min(CH[3], yy + 9))], fill=(255, 215, 0, int(a * 0.8)), width=2)
+            d.text((x, CH[1] - 8), f"約{km:g}km", font=font(22, "black"), fill=(255, 215, 0, a), anchor="mb",
+                   stroke_width=3, stroke_fill=STROKE)
+            placer.block(d.textbbox((x, CH[1] - 8), f"約{km:g}km", font=font(22, "black"), anchor="mb", stroke_width=3))
         # 主な駅(点は必ず描き、名前は重ならない所にだけ置く)
         marks = []
         for r in routes:
