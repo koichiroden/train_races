@@ -15,6 +15,7 @@
 config 例は configs/fare_shinjuku_fujisawa.json を参照。
   "video_type": "fare"
   "fare_label": "IC運賃"
+  "view": "3d"                     # 省略時は平面版。"3d" で鳥瞰図版(race_video/fare3d_video.py)
   "compare_km": [10, 20, 30]       # 省略時は自動
   "routes": [ {"key","name","short_name","color",
                "stations": [{"line": "...", "name": "新宿", "fare": 0},
@@ -304,6 +305,11 @@ def _draw_final(canvas, cfg, routes, t):
 
 
 def render_fare(config, geojson_path, station_db, out_dir="output", fast_preview=False, out_name=None):
+    if config.get("view") == "3d":
+        # 鳥瞰図(3D)版は別モジュール(race_video/fare3d_video.py)
+        from .fare3d_video import render_fare3d
+        return render_fare3d(config, geojson_path, station_db, out_dir=out_dir, fast_preview=fast_preview,
+                             out_name=out_name)
     slug = out_name or config.get("slug", "fare")
     line_geoms = load_line_geoms(geojson_path)
     routes = []
