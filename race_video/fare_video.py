@@ -27,6 +27,19 @@ config 例は configs/fare_shinjuku_fujisawa.json を参照。
 駅に "km"(始発駅からの距離。営業キロなど)を書くと、距離グラフ・同距離比較・
 1kmあたり運賃にその値を使う(省略時は線路データ上の距離)。
 終着駅の "fare" は必須。
+
+■ 距離運賃表から運賃を計算する書き方(駅ごとの運賃を調べなくてよい)
+  ルートに "fare_tables" を書くと、各駅の "km"(始発駅からの営業キロ)から運賃を自動計算する。
+    "fare_tables": [{"name": "JR東日本", "table": [[3, 150], [6, 190], [10, 210], ...]}]
+    よく使う表は data/fare_tables.json にプリセットとして入っていて、{"preset": "jre_kansen_ic"} で呼べる
+      (jre_kansen_ic / jre_kansen_ticket = JR東日本 幹線 IC/きっぷ運賃、2026年3月改定後)。
+      table の各行は [何kmまで, 運賃]。km の端数は切り上げて表に当てる("km_round": "none" で切り上げなし)。
+    会社をまたぐルート(乗り継ぎ)は表を複数書き、乗り換え駅に "company": "東急" のように書くと
+    その駅から先はその会社の表で計算し、会社ごとの運賃を足す(乗継割引などは考えない)。
+    1社だけなら "fare_table": [[3, 150], ...] でもよい。
+  駅に "fare" を書いた駅はその値を優先する(加算運賃などの例外用)。
+  距離運賃表を使うときは全駅が運賃駅になる(ラベルが出るのは "popup": true の駅と終着駅)。
+  "km" を書かない駅は線路データの距離から補うので、営業キロを入れておくのがおすすめ。
 """
 import math
 
@@ -42,6 +55,64 @@ from .route_builder import load_line_geoms
 
 MAP_BOX = (60, 470, 1020, 1090)
 PALETTE = [(0, 110, 235), (232, 70, 40), (31, 158, 107), (139, 92, 246)]
+
+
+def _parse_table(rows):
+    out = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            km, fare = row.get("km"), row.get("fare")
+        else:
+            km, fare = row[0], row[1]
+        out.append((float(km), float(fare)))
+    out.sort()
+    if not out:
+        raise ValueError("距離運賃表が空です")
+    return out
+
+
+_PRESETS = None
+
+
+def fare_table_presets():
+    """data/fare_tables.json の距離運賃表プリセット(JR東日本 幹線など)"""
+    global _PRESETS
+    if _PRESETS is None:
+        import json
+        from pathlib import Path
+        p = Path(__file__).resolve().parent.parent / "data" / "fare_tables.json"
+        _PRESETS = {k: v for k, v in json.loads(p.read_text(encoding="utf-8")).items() if not k.startswith("_")} if p.exists() else {}
+    return _PRESETS
+
+
+def _resolve_table(t, i):
+    """{"preset": "jre_kansen_ic"} ならプリセットの表を使う(name を書けば会社名を上書き)"""
+    if t.get("preset") and not t.get("table"):
+        pr = fare_table_presets().get(t["preset"])
+        if pr is None:
+            raise ValueError(f"距離運賃表のプリセット「{t['preset']}」が data/fare_tables.json にありません")
+        return t.get("name") or pr["name"], _parse_table(pr["table"])
+    return t.get("name") or f"会社{i + 1}", _parse_table(t.get("table"))
+
+
+def fare_tables_of(cfg):
+    """ルートconfigの距離運賃表を [(会社名, [(上限km, 運賃), ...]), ...] で返す(無ければ空)"""
+    if cfg.get("fare_tables"):
+        return [_resolve_table(t, i) for i, t in enumerate(cfg["fare_tables"])]
+    if cfg.get("fare_table"):
+        return [(cfg.get("company") or cfg.get("name") or "会社1", _parse_table(cfg["fare_table"]))]
+    return []
+
+
+def lookup_fare(table, km, round_up=True, who=""):
+    if km <= 1e-9:
+        return 0.0
+    k = math.ceil(round(km, 3) - 1e-9) if round_up else km
+    for upper, fare in table:
+        if k <= upper + 1e-9:
+            return fare
+    print(f"[warn] {who}: {km:.1f}km が距離運賃表の範囲外です。表の最後の運賃({int(table[-1][1])}円)を使います")
+    return table[-1][1]
 
 
 def yen(v):
@@ -61,20 +132,6 @@ class FareRoute:
         self.path = PolyPath(route)
         sts = route["stations"]
         k0 = sts[0]["cum_km"]
-        self.points = []   # (km_from_start, fare, station)
-        for i, s in enumerate(sts):
-            fare = s.get("fare")
-            if i == 0 and fare is None:
-                fare = 0
-            if fare is None or fare == "":
-                continue
-            self.points.append((s["cum_km"] - k0, float(fare), s))
-        if sts[-1].get("fare") in (None, ""):
-            raise ValueError(f"[{self.name}] 終着駅 {sts[-1]['name']} の fare(運賃)は必須です")
-        self.k0 = k0
-        self.total_km = sts[-1]["cum_km"] - k0
-        self.final_fare = self.points[-1][1]
-
         # 表示用の距離(グラフ・同距離比較・1kmあたり運賃に使う)。
         # 駅に "km"(始発駅からの距離。営業キロなど)が書いてあればそれを使い、
         # 無い駅は前後の手入力値の間を線路上の距離の比で補う(手入力が無ければ線路上の距離)。
@@ -96,6 +153,44 @@ class FareRoute:
                 disp.append(man[a] + (g - geo[a]) * ratio)
             else:
                 disp.append(g)
+        # 距離運賃表があれば、運賃の書いていない駅の運賃を営業キロ(表示km)から計算する
+        tables = fare_tables_of(cfg)
+        if tables:
+            tmap = dict(tables)
+            round_up = cfg.get("km_round", "ceil") != "none"
+            cur, start, done = tables[0][0], 0.0, 0.0
+            if sts[0].get("company") in tmap:
+                cur = sts[0]["company"]
+            for i, s in enumerate(sts):
+                c = s.get("company")
+                if i > 0 and c and c != cur:
+                    if c not in tmap:
+                        raise ValueError(f"[{self.name}] {s['name']} の company「{c}」の距離運賃表がありません")
+                    done += lookup_fare(tmap[cur], disp[i] - start, round_up, f"{self.name} {s['name']}")
+                    calc = done
+                    cur, start = c, disp[i]
+                else:
+                    calc = done + lookup_fare(tmap[cur], disp[i] - start, round_up, f"{self.name} {s['name']}")
+                if i == 0:
+                    s["fare"] = 0
+                elif s.get("fare") in (None, ""):
+                    s["fare"] = calc
+            if len(known) < 2:
+                print(f"[warn] {self.name}: 駅の km(営業キロ)が入っていないので、線路データの距離で運賃を計算しています")
+        self.points = []   # (km_from_start, fare, station)
+        for i, s in enumerate(sts):
+            fare = s.get("fare")
+            if i == 0 and fare is None:
+                fare = 0
+            if fare is None or fare == "":
+                continue
+            self.points.append((s["cum_km"] - k0, float(fare), s))
+        if sts[-1].get("fare") in (None, ""):
+            raise ValueError(f"[{self.name}] 終着駅 {sts[-1]['name']} の fare(運賃)は必須です")
+        self.k0 = k0
+        self.total_km = sts[-1]["cum_km"] - k0
+        self.final_fare = self.points[-1][1]
+
         by_station = {id(s): d for s, d in zip(sts, disp)}
         self.dpoints = [(by_station[id(st)], fare, st) for _k, fare, st in self.points]   # 表示km版
         self.disp_total_km = disp[-1]

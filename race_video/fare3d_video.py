@@ -105,7 +105,10 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
         pts = np.array([r.path.lonlat_at_km(r.k0 + k) for k in kms])
         x, y = to_xy(pts[:, 0], pts[:, 1])
         r.s_km, r.s_x, r.s_y = kms, x, y
-        r.s_fare = np.array([r.fare_at_progress(k)[1] for k in kms])
+        # 壁の高さ = 次に着く運賃駅までの運賃(出発直後から初乗り運賃、終点の値上がりも最後の区間に出る)
+        fk = np.array([p[0] for p in r.points[1:]])
+        fv = np.array([p[1] for p in r.points[1:]], dtype=float)
+        r.s_fare = fv[np.minimum(np.searchsorted(fk - 1e-6, kms), len(fv) - 1)]
         r.st_xy = [(to_xy(st["lon"], st["lat"]), k, f, st) for k, f, st in r.points]
         # 線路上の距離(動き) → 表示用の距離(グラフ横軸。手入力kmがあればそれ)
         r.g2d = (np.array([p[0] for p in r.points]), np.array([p[0] for p in r.dpoints]))
@@ -320,6 +323,9 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
             for i in range(m):
                 h = r.s_fare[i] * z_scale
                 tp += [[r.s_x[i], r.s_y[i], h], [r.s_x[i + 1], r.s_y[i + 1], h]]
+            if km_now >= r.total_km - 1e-6:
+                # 終点で運賃が上がる場合: 終点で上辺を運賃の高さまで立ち上げる
+                tp.append([r.s_x[-1], r.s_y[-1], r.final_fare * z_scale])
             qq, _ = proj(np.array(tp))
             d.line([tuple(p) for p in qq], fill=lighter(r.color) + (255,), width=4)
         # 車両(文字より先に場所を確保)
@@ -398,6 +404,9 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
                 n = len(p3) // 2
                 q3, _ = proj(p3[n:][::-1])
                 tops += [tuple(p) for p in mix(q3, p2[n:][::-1])]
+            # 終点の立ち上がり(終点で運賃が上がる場合も最後の段が見えるように)
+            q3, _ = proj(np.array([[r.s_x[-1], r.s_y[-1], r.final_fare * z_scale]]))
+            tops += [tuple(p) for p in mix(q3, np.array([[float(CX(r.disp_total_km)), float(CY(r.final_fare))]]))]
             d.line(tops, fill=lighter(r.color) + (255,), width=5, joint="curve")
         if label_alpha <= 0:
             return

@@ -122,6 +122,9 @@ def main():
             continue
         t = p.read_text(encoding="utf-8")
         t = t.replace("/*SHARED_CSS*/", css).replace("/*SHARED_JS*/", js).replace("/*STATION_DATA*/", station_json)
+        if "/*FARE_PRESETS*/" in t:
+            fp = json.loads((ROOT.parent / "data" / "fare_tables.json").read_text(encoding="utf-8"))
+            t = t.replace("/*FARE_PRESETS*/", json.dumps({k: v for k, v in fp.items() if not k.startswith("_")}, ensure_ascii=False, separators=(",", ":")))
         if "/*SAMPLE_STATE*/" in t:
             t = t.replace("/*SAMPLE_STATE*/", overtake_sample_state())
         out = ROOT / f"{name}_builder.html"
