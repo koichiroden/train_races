@@ -136,6 +136,61 @@ function tableFares(r, st) {
   });
 }
 
+// 表モード: 会社ごとの区間 [{start, rows, done}](距離で運賃を出すのに使う)
+function tableSections(r, st) {
+  const tbs = ensureTables(r).map(t => ({ name: t.name, rows: parseTable(t.text).rows }));
+  const byName = Object.fromEntries(tbs.map(t => [t.name, t]));
+  const secs = []; let cur = tbs[0], start = 0, done = 0;
+  st.forEach((s, i) => {
+    const c = i > 0 ? rrow(r, s.name).company : "";
+    if (c && byName[c] && byName[c] !== cur) {
+      secs.push({ start, rows: cur.rows, done });
+      done += lookupFare(cur.rows, s.dkm - start, !r.no_round).fare; cur = byName[c]; start = s.dkm;
+    }
+  });
+  secs.push({ start, rows: cur.rows, done });
+  return secs;
+}
+function fareAtDkm(r, secs, d) {
+  let sec = secs[0]; secs.forEach(x => { if (d >= x.start - 1e-9) sec = x; });
+  return sec.done + lookupFare(sec.rows, Math.max(0, d - sec.start), !r.no_round).fare;
+}
+// 距離で決まる運賃の階段: [[距離, 運賃], ...](境目の距離で段が上がる)
+function distanceSteps(r, st) {
+  const secs = tableSections(r, st), end = st[st.length - 1].dkm;
+  const br = new Set([0, end]);
+  secs.forEach(x => x.rows.forEach(([u]) => { const e = x.start + u; if (e > 0 && e < end) br.add(e); }));
+  st.forEach(s => br.add(s.dkm));
+  const xs = [...br].sort((a, b) => a - b), out = [];
+  for (let i = 0; i < xs.length - 1; i++) { if (xs[i + 1] - xs[i] < 1e-6) continue; out.push([xs[i], xs[i + 1], fareAtDkm(r, secs, (xs[i] + xs[i + 1]) / 2)]); }
+  return out;
+}
+
+// 駅ごとの運賃: 隣の運賃駅とのあいだで運賃が上がる距離を推定(Python の fare_video.estimate_edge と同じ)
+function edgeScore(u) {
+  if (u > 100) return u % 20 === 0 ? 4 : u % 10 === 0 ? 2 : 0;
+  if (u >= 50) return u % 10 === 0 ? 4 : u % 5 === 0 ? 2 : 0;
+  if (u > 10) return u % 5 === 0 ? 4 : 0;
+  return [3, 6, 10].includes(u) ? 4 : [1, 2, 4, 5, 7, 8].includes(u) ? 2 : 1;
+}
+function estimateEdge(da, db) {
+  const lo = Math.ceil(da - 1e-9), hi = Math.ceil(db - 1e-9) - 1, mid = (da + db) / 2;
+  if (hi < lo || db - da < 1e-6) return mid;
+  let best = lo;
+  for (let u = lo; u <= hi; u++) { const a = [edgeScore(u), -Math.abs(u - mid)], b = [edgeScore(best), -Math.abs(best - mid)]; if (a[0] > b[0] || (a[0] === b[0] && a[1] > b[1])) best = u; }
+  return Math.max(best, da);
+}
+function stationSteps(pts) {
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    if (i === 0) { out.push([a.km, b.km, b.fare]); continue; }
+    const e = b.fare > a.fare ? estimateEdge(a.km, b.km) : b.km;
+    out.push([a.km, e, a.fare], [e, b.km, b.fare]);
+  }
+  return out;
+}
+
 function routeStations(r) { return filterRemoved(buildStationList(r.segments), r.removed); }
 // 表示用の距離(dkm): 手入力のkmがあればそれ、無い駅は前後の手入力値の間を
 // 駅データの距離の比で補う(Python側 fare_video.py と同じ考え方)
@@ -160,7 +215,7 @@ function routeData(r) {
     if (calc) { s.calc = calc[i]; if (f === null || Number.isNaN(f)) f = calc[i].fare; }
     if (f !== null && !Number.isNaN(f)) pts.push({ km: s.dkm, fare: f, name: s.name });
   });
-  return { st, pts, calc };
+  return { st, pts, calc, steps: calc && st.length > 1 ? distanceSteps(r, st) : (pts.length > 1 ? stationSteps(pts) : null) };
 }
 
 function buildConfig() {
@@ -351,7 +406,7 @@ function renderPreview(datas) {
   const all = datas.flatMap(d => d.pts);
   if (all.length < 2) return;
   const maxK = Math.max(...datas.map(d => d.st.length ? d.st[d.st.length - 1].dkm : 0)) * 1.04 || 1;
-  const maxF = Math.max(...all.map(p => p.fare)) * 1.1 || 1;
+  const maxF = Math.max(...all.map(p => p.fare), ...datas.flatMap(d => (d.steps || []).map(x => x[2]))) * 1.1 || 1;
   const L = 56, R = 505, T = 24, B = 286;
   const X = k => L + (R - L) * k / maxK, Y = f => B - (B - T) * f / maxF;
   const nice = (span) => { const raw = span / 5, mag = 10 ** Math.floor(Math.log10(raw)); return [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= raw); };
@@ -367,8 +422,14 @@ function renderPreview(datas) {
   datas.forEach((d, ri) => {
     if (!d.pts.length) return;
     let path = `M${X(0)},${Y(d.pts[0].fare)}`, prev = d.pts[0];
+    if (d.steps) {
+      // 表モード: 距離の境目で上がる(駅の途中でも)。終点に別の運賃(特定運賃など)を入れたら最後に合わせる
+      d.steps.forEach(([a, b, f]) => { path += ` L${X(a).toFixed(1)},${Y(f).toFixed(1)} L${X(b).toFixed(1)},${Y(f).toFixed(1)}`; });
+      const lp = d.pts[d.pts.length - 1]; path += ` L${X(lp.km).toFixed(1)},${Y(lp.fare).toFixed(1)}`;
+      prev = null;
+    }
     // 動画と同じく「次の運賃駅までの運賃」の高さで区間を描く(出発直後から初乗り運賃)
-    d.pts.slice(1).forEach(p => { path += ` L${X(prev.km).toFixed(1)},${Y(p.fare).toFixed(1)} L${X(p.km).toFixed(1)},${Y(p.fare).toFixed(1)}`; prev = p; });
+    if (prev) d.pts.slice(1).forEach(p => { path += ` L${X(prev.km).toFixed(1)},${Y(p.fare).toFixed(1)} L${X(p.km).toFixed(1)},${Y(p.fare).toFixed(1)}`; prev = p; });
     svg.appendChild(svgEl("path", { d: path, fill: "none", stroke: state.routes[ri].color, "stroke-width": 3, "stroke-linejoin": "round" }));
     d.pts.slice(1).forEach(p => svg.appendChild(svgEl("circle", { cx: X(p.km), cy: Y(p.fare), r: 3.5, fill: state.routes[ri].color })));
     const lp = d.pts[d.pts.length - 1];
