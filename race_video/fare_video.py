@@ -115,6 +115,29 @@ def lookup_fare(table, km, round_up=True, who=""):
     return table[-1][1]
 
 
+def _edge_score(u):
+    """運賃表の境目らしさ(大きいほど境目に使われやすい km)"""
+    if u > 100:
+        return 4 if u % 20 == 0 else (2 if u % 10 == 0 else 0)
+    if u >= 50:
+        return 4 if u % 10 == 0 else (2 if u % 5 == 0 else 0)
+    if u > 10:
+        return 4 if u % 5 == 0 else 0
+    return 4 if u in (3, 6, 10) else (2 if u in (1, 2, 4, 5, 7, 8) else 1)
+
+
+def estimate_edge(da, db):
+    """駅ごとの運賃しか無いとき、da〜db km の2駅のあいだで運賃が上がる距離を推定する。
+    運賃は「1km未満切り上げの距離」で決まるので、境目は ceil(da)〜ceil(db)-1 の整数km のどれか。
+    その中から運賃表の境目らしい km(5・10km刻み、3・6・10km)を優先し、同点なら2駅の中ほどを選ぶ"""
+    lo, hi = math.ceil(da - 1e-9), math.ceil(db - 1e-9) - 1
+    if hi < lo or db - da < 1e-6:
+        return (da + db) / 2
+    mid = (da + db) / 2
+    best = max(range(lo, hi + 1), key=lambda u: (_edge_score(u), -abs(u - mid)))
+    return float(max(best, da))
+
+
 def yen(v):
     return f"¥{int(round(v)):,}"
 
@@ -155,10 +178,12 @@ class FareRoute:
                 disp.append(g)
         # 距離運賃表があれば、運賃の書いていない駅の運賃を営業キロ(表示km)から計算する
         tables = fare_tables_of(cfg)
+        self.sections = None   # 距離運賃表のとき: [(区間の始まりの表示km, 表, それまでの運賃)]
         if tables:
             tmap = dict(tables)
             round_up = cfg.get("km_round", "ceil") != "none"
             cur, start, done = tables[0][0], 0.0, 0.0
+            secs = []
             if sts[0].get("company") in tmap:
                 cur = sts[0]["company"]
             for i, s in enumerate(sts):
@@ -166,6 +191,7 @@ class FareRoute:
                 if i > 0 and c and c != cur:
                     if c not in tmap:
                         raise ValueError(f"[{self.name}] {s['name']} の company「{c}」の距離運賃表がありません")
+                    secs.append((start, tmap[cur], done))
                     done += lookup_fare(tmap[cur], disp[i] - start, round_up, f"{self.name} {s['name']}")
                     calc = done
                     cur, start = c, disp[i]
@@ -175,6 +201,8 @@ class FareRoute:
                     s["fare"] = 0
                 elif s.get("fare") in (None, ""):
                     s["fare"] = calc
+            secs.append((start, tmap[cur], done))
+            self.sections, self.round_up = secs, round_up
             if len(known) < 2:
                 print(f"[warn] {self.name}: 駅の km(営業キロ)が入っていないので、線路データの距離で運賃を計算しています")
         self.points = []   # (km_from_start, fare, station)
@@ -195,6 +223,48 @@ class FareRoute:
         self.dpoints = [(by_station[id(st)], fare, st) for _k, fare, st in self.points]   # 表示km版
         self.disp_total_km = disp[-1]
         self.manual_km = len(known) > 1
+
+    def fare_edges(self):
+        """運賃が変わる表示kmの一覧(描画で境目をきっちり出すために使う)"""
+        end = self.disp_total_km
+        if self.sections:
+            out = [start + u for start, table, _ in self.sections for u, _f in table]
+            return sorted(e for e in out if 0 < e < end)
+        return [e for e in self._station_edges() if 0 < e < end]
+
+    def _station_edges(self):
+        """駅ごとの運賃のルート: 隣り合う運賃駅のあいだで運賃が上がる位置(推定)"""
+        if getattr(self, "_edges", None) is None:
+            dp = self.dpoints
+            self._edges = []
+            for i in range(len(dp) - 1):
+                (da, fa, _), (db, fb, _) = dp[i], dp[i + 1]
+                if i == 0:
+                    e = da                       # 出発直後から初乗り運賃
+                elif fb > fa:
+                    e = estimate_edge(da, db)
+                else:
+                    e = db                       # 値下がり(特定運賃など)は駅に着いたところで
+                self._edges.append(e)
+        return self._edges
+
+    def fare_at_dkm(self, d):
+        """表示km d 地点まで乗ったときの運賃。距離運賃表のルートは表から(距離の境目で上がる)、
+        駅ごとの運賃のルートは隣の運賃駅とのあいだの推定した境目で上がる"""
+        if not self.sections:
+            dp, edges = self.dpoints, self._station_edges()
+            if len(dp) < 2:
+                return dp[-1][1]
+            for i in range(len(dp) - 1):
+                if d <= dp[i + 1][0] + 1e-9:
+                    return dp[i][1] if (d <= edges[i] + 1e-9 and i > 0) else dp[i + 1][1]
+            return dp[-1][1]
+        sec = self.sections[0]
+        for x in self.sections:
+            if d >= x[0] - 1e-9:
+                sec = x
+        start, table, done = sec
+        return done + lookup_fare(table, max(0.0, d - start), self.round_up)
 
     def fare_at_progress(self, km):
         """km 地点までに通過した最後の運賃駅の (運賃, 駅, 通過km)"""

@@ -99,7 +99,7 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
         return (np.asarray(lon) - lon0) * KX, (np.asarray(lat) - lat0) * KY
 
     for r in routes:
-        # 0.25kmごとに線路をサンプリングし、各点の運賃(その地点までに通過した最後の運賃駅)を持たせる
+        # 0.25kmごとに線路をサンプリングし、各点の運賃を持たせる
         n = max(2, int(r.total_km / 0.25))
         kms = np.linspace(0, r.total_km, n + 1)
         pts = np.array([r.path.lonlat_at_km(r.k0 + k) for k in kms])
@@ -109,16 +109,27 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
         fk = np.array([p[0] for p in r.points[1:]])
         fv = np.array([p[1] for p in r.points[1:]], dtype=float)
         r.s_fare = fv[np.minimum(np.searchsorted(fk - 1e-6, kms), len(fv) - 1)]
-        r.st_xy = [(to_xy(st["lon"], st["lat"]), k, f, st) for k, f, st in r.points]
-        # 線路上の距離(動き) → 表示用の距離(グラフ横軸。手入力kmがあればそれ)
         r.g2d = (np.array([p[0] for p in r.points]), np.array([p[0] for p in r.dpoints]))
         r.s_dkm = np.interp(r.s_km, *r.g2d)
+        if True:
+            # 走った距離で運賃を決める(駅の途中でも距離の境目で上がる)。距離運賃表のルートは表の境目、
+            # 駅ごとの運賃のルートは隣の運賃駅とのあいだで推定した境目(fare_video.estimate_edge)。
+            # 境目の位置がずれないよう、境目の前後にも点を足してサンプリングし直す
+            edges = np.array(r.fare_edges(), dtype=float)
+            dk = np.unique(np.concatenate([r.s_dkm, edges + 1e-3, edges - 1e-3]))
+            dk = dk[(dk >= 0) & (dk <= r.s_dkm[-1])]
+            kms = np.interp(dk, r.g2d[1], r.g2d[0])
+            pts = np.array([r.path.lonlat_at_km(r.k0 + k) for k in kms])
+            x, y = to_xy(pts[:, 0], pts[:, 1])
+            r.s_km, r.s_x, r.s_y, r.s_dkm = kms, x, y, dk
+            r.s_fare = np.array([r.fare_at_dkm(d) for d in dk])
+        r.st_xy = [(to_xy(st["lon"], st["lat"]), k, f, st) for k, f, st in r.points]
 
     allx = np.concatenate([r.s_x for r in routes])
     ally = np.concatenate([r.s_y for r in routes])
     cxw, cyw = (allx.min() + allx.max()) / 2, (ally.min() + ally.max()) / 2
     extent = max(allx.max() - allx.min(), ally.max() - ally.min(), 1.0)
-    max_fare = max(r.final_fare for r in routes)
+    max_fare = max(max(r.final_fare, float(np.max(r.s_fare))) for r in routes)
     z_scale = extent * 0.42 / max_fare
 
     margin = extent * 0.9
