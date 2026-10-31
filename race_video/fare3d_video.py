@@ -2,7 +2,8 @@
 """
 運賃比較の「鳥瞰図(3D)」版。"video_type": "fare" の標準の見せ方
 (以前の平面版と同じconfigで動く。平面版にしたいときだけ "view": "2d")。
-config の "compare_km"(例 [10, 20, 30])があれば、最後のグラフに「約10km」などの目印線を引く。
+最後のグラフの横軸は標準で「全行程の何%まで乗ったか」(0〜100%)。"chart_x": "km" で距離(km)にできる。
+目印線: %表示では "compare_pct"(例 [50])、km表示では "compare_km"(例 [10, 20, 30])の位置に引く。
 
   1) タイトル   : 画面中央に大きくタイトル → 上部の見出しへ
   2) 鳥瞰図     : 地図を斜め上から見下ろし、各ルートの線路の上に「高さ=運賃」の壁を立てる。
@@ -197,7 +198,12 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
 
     # ------------------------------------------------------------ 2Dグラフ(射影先)
     CH = (170, 560, CANVAS_W - 200, 1300)
-    DMAX = max(r.disp_total_km for r in routes) * 1.03
+    # 横軸: 標準は「全行程の何%まで乗ったか」(長さの違うルートでも始点・終点がそろう)。"chart_x": "km" で距離(km)
+    PCT = config.get("chart_x", "percent") != "km"
+    DMAX = 103.0 if PCT else max(r.disp_total_km for r in routes) * 1.03
+
+    def GX(r, k):
+        return np.asarray(k) / max(r.disp_total_km, 1e-6) * 100.0 if PCT else np.asarray(k)
     FMAX = max_fare * 1.12
 
     def CX(k):
@@ -219,8 +225,9 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
             xs, ys, ds = r.s_x[i:j + 1], r.s_y[i:j + 1], r.s_dkm[i:j + 1]
             p3 = np.concatenate([np.stack([xs, ys, np.zeros_like(xs)], 1),
                                  np.stack([xs, ys, np.full_like(xs, h * z_scale)], 1)[::-1]])
-            p2 = np.concatenate([np.stack([CX(ds), np.full_like(ds, CY(0))], 1),
-                                 np.stack([CX(ds), np.full_like(ds, CY(h))], 1)[::-1]])
+            gx = CX(GX(r, ds))
+            p2 = np.concatenate([np.stack([gx, np.full_like(ds, CY(0))], 1),
+                                 np.stack([gx, np.full_like(ds, CY(h))], 1)[::-1]])
             out.append((p3, p2, h))
             i = j
         return out
@@ -373,11 +380,11 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
     def draw_chart_axes(d, alpha):
         a = int(alpha)
         x0, y0, x1, y1 = CH
-        ks, fs = _nice(DMAX, 5), _nice(FMAX, 4)
+        ks, fs = (25.0 if PCT else _nice(DMAX, 5)), _nice(FMAX, 4)
         k = 0.0
         while k <= DMAX:
             d.line([(CX(k), y0), (CX(k), y1)], fill=(255, 255, 255, int(28 * a / 255)), width=1)
-            d.text((CX(k), y1 + 26), f"{k:g}km", font=font(24), fill=(190, 200, 220, a), anchor="mm")
+            d.text((CX(k), y1 + 26), f"{k:g}%" if PCT else f"{k:g}km", font=font(24), fill=(190, 200, 220, a), anchor="mm")
             k += ks
         v = 0.0
         while v <= FMAX:
@@ -388,7 +395,7 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
         d.line([(x0, y0), (x0, y1)], fill=(255, 255, 255, int(150 * a / 255)), width=2)
         d.text((CANVAS_W / 2, y0 - 56), config.get("chart_title", "地図の壁をたたむと…"), font=font(42, "black"),
                fill=(255, 255, 255, a), anchor="mm")
-        d.text((CANVAS_W / 2, y1 + 74), f"横軸=乗った距離 / 縦軸={fare_label}", font=font(26),
+        d.text((CANVAS_W / 2, y1 + 74), (f"横軸=全行程の何%まで乗ったか / 縦軸={fare_label}" if PCT else f"横軸=乗った距離 / 縦軸={fare_label}"), font=font(26),
                fill=(255, 215, 0, a), anchor="mm")
 
     def draw_morph(img, proj, u, label_alpha):
@@ -417,7 +424,7 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
                 tops += [tuple(p) for p in mix(q3, p2[n:][::-1])]
             # 終点の立ち上がり(終点で運賃が上がる場合も最後の段が見えるように)
             q3, _ = proj(np.array([[r.s_x[-1], r.s_y[-1], r.final_fare * z_scale]]))
-            tops += [tuple(p) for p in mix(q3, np.array([[float(CX(r.disp_total_km)), float(CY(r.final_fare))]]))]
+            tops += [tuple(p) for p in mix(q3, np.array([[float(CX(GX(r, r.disp_total_km))), float(CY(r.final_fare))]]))]
             d.line(tops, fill=lighter(r.color) + (255,), width=5, joint="curve")
         if label_alpha <= 0:
             return
@@ -425,7 +432,7 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
         placer = LabelPlacer(d)
         placer.block((CH[0] - 80, CH[3] - 4, CH[2] + 40, CH[3] + 100))   # 目盛り・説明文
         # 終点の運賃(最優先。右端に縦に並べる)
-        ends = sorted([[float(CX(r.disp_total_km)), float(CY(r.final_fare)), r] for r in routes], key=lambda e: e[1])
+        ends = sorted([[float(CX(GX(r, r.disp_total_km))), float(CY(r.final_fare)), r] for r in routes], key=lambda e: e[1])
         for e1, e2 in zip(ends, ends[1:]):
             if e2[1] - e1[1] < 76:
                 e2[1] = e1[1] + 76
@@ -437,29 +444,34 @@ def render_fare3d(config, geojson_path, station_db, out_dir="output", fast_previ
             placer.block(d.textbbox((x + 14, y), r.short, font=font(28, "black"), anchor="lb", stroke_width=3))
             placer.block(d.textbbox((x + 14, y + 2), yen(r.final_fare), font=font(34, "black"), anchor="lt", stroke_width=3))
         # 同じ距離の目印(compare_km)
-        for km in [k for k in (config.get("compare_km") or []) if 0 < k < DMAX]:
+        # %表示のときは "compare_pct"(例 [50])、km表示のときは "compare_km" の位置に目印
+        marks_cfg = (config.get("compare_pct") or []) if PCT else (config.get("compare_km") or [])
+        for km in [k for k in marks_cfg if 0 < k < DMAX]:
             x = float(CX(km))
             for yy in range(int(CH[1]), int(CH[3]), 18):
                 d.line([(x, yy), (x, min(CH[3], yy + 9))], fill=(255, 215, 0, int(a * 0.8)), width=2)
-            d.text((x, CH[1] - 8), f"約{km:g}km", font=font(22, "black"), fill=(255, 215, 0, a), anchor="mb",
+            d.text((x, CH[1] - 8), (f"{km:g}%" if PCT else f"約{km:g}km"), font=font(22, "black"), fill=(255, 215, 0, a), anchor="mb",
                    stroke_width=3, stroke_fill=STROKE)
-            placer.block(d.textbbox((x, CH[1] - 8), f"約{km:g}km", font=font(22, "black"), anchor="mb", stroke_width=3))
+            placer.block(d.textbbox((x, CH[1] - 8), (f"{km:g}%" if PCT else f"約{km:g}km"), font=font(22, "black"), anchor="mb", stroke_width=3))
         # 主な駅(点は必ず描き、名前は重ならない所にだけ置く)
         marks = []
         for r in routes:
             for (k, fare, st) in r.dpoints[1:-1]:
                 if st.get("popup"):
-                    x, y = float(CX(k)), float(CY(fare))
+                    x, y = float(CX(GX(r, k))), float(CY(fare))
                     d.ellipse([x - 6, y - 6, x + 6, y + 6], fill=tuple(r.color) + (a,), outline=(255, 255, 255, a), width=2)
                     placer.block((x - 7, y - 7, x + 7, y + 7))
                     marks.append((k, x, y, r, st))
         for k, x, y, r, st in sorted(marks, key=lambda t: t[0]):
-            pos, off = placer.place(None, x, y, st["name"], font(22), CHART_OFFSETS, stroke=3)
+            # 駅名は路線カラー(暗い背景で読めるよう少し明るくし、太字にする)
+            fnt = font(22, "black")
+            col = lighter(r.color, 0.25)
+            pos, off = placer.place(None, x, y, st["name"], fnt, CHART_OFFSETS, stroke=3)
             if pos is None:
                 continue
             if abs(off[0]) > 0 or abs(off[1]) > 20:
-                d.line([(x, y), (pos[0], pos[1] - (8 if off[1] > 0 else -2))], fill=(230, 235, 245, int(a * 0.6)), width=1)
-            d.text(pos, st["name"], font=font(22), fill=(230, 235, 245, a), anchor="mb", stroke_width=3, stroke_fill=STROKE)
+                d.line([(x, y), (pos[0], pos[1] - (8 if off[1] > 0 else -2))], fill=col + (int(a * 0.7),), width=2)
+            d.text(pos, st["name"], font=fnt, fill=col + (a,), anchor="mb", stroke_width=4, stroke_fill=STROKE)
 
     # ------------------------------------------------------------ タイムライン
     fps = 20 if fast_preview else int(config.get("fps", 60))
